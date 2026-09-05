@@ -480,7 +480,7 @@ const Settings: React.FC = () => {
       apiConfig, updateApiConfig, closeApp, availableModels, setAvailableModels,
       theme, updateTheme,
       exportSystem, importSystem, addToast, showError, resetSystem, updateCharacter,
-      apiPresets, addApiPreset, updateApiPreset, removeApiPreset,
+      apiPresets, addApiPreset, updateApiPreset, removeApiPreset, moveApiPreset,
       sysOperation, // Get progress state
       realtimeConfig, updateRealtimeConfig, // 实时感知配置
       // 改工具凭据时要连云端提示词一起刷（见 syncAmsgToolConfigAndPrompts）
@@ -2315,12 +2315,29 @@ const Settings: React.FC = () => {
                 <div className="mb-4">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block pl-1">我的预设 (Presets)</label>
                     <div className="flex gap-2 flex-wrap">
-                        {apiPresets.map(preset => (
+                        {apiPresets.map((preset, presetIndex) => (
                             <div key={preset.id} className={`flex items-center rounded-lg pl-3 pr-1 py-1 shadow-sm border transition-colors ${
                                 activePresetId === preset.id
                                     ? 'bg-primary/5 border-primary/30'
                                     : 'bg-white border-slate-200'
                             }`}>
+                                {/* ↑↓ 排序：故障转移候选顺序跟随这里的数组顺序 */}
+                                <button
+                                    type="button"
+                                    aria-label={`上移预设 ${preset.name}`}
+                                    title="上移（故障转移时优先尝试）"
+                                    disabled={presetIndex === 0}
+                                    onClick={(event) => { event.stopPropagation(); moveApiPreset(preset.id, 'up'); }}
+                                    className={`p-0.5 rounded-full text-[10px] leading-none transition-colors ${presetIndex === 0 ? 'text-slate-200' : 'text-slate-400 hover:bg-primary/10 hover:text-primary'}`}
+                                >▲</button>
+                                <button
+                                    type="button"
+                                    aria-label={`下移预设 ${preset.name}`}
+                                    title="下移"
+                                    disabled={presetIndex === apiPresets.length - 1}
+                                    onClick={(event) => { event.stopPropagation(); moveApiPreset(preset.id, 'down'); }}
+                                    className={`p-0.5 mr-1 rounded-full text-[10px] leading-none transition-colors ${presetIndex === apiPresets.length - 1 ? 'text-slate-200' : 'text-slate-400 hover:bg-primary/10 hover:text-primary'}`}
+                                >▼</button>
                                 <button type="button" onClick={() => applyPreset(preset)}
                                     title={`切换到 ${preset.name}`}
                                     className={`text-xs font-medium cursor-pointer mr-1.5 transition-colors ${
@@ -2357,7 +2374,7 @@ const Settings: React.FC = () => {
                             </div>
                         ))}
                     </div>
-                    <p className="text-[9px] text-slate-300 mt-1.5 pl-1">点名称直接切换并生效；铅笔改这条预设的内容；长按或双击 × 才会删除。</p>
+                    <p className="text-[9px] text-slate-300 mt-1.5 pl-1">点名称直接切换并生效；铅笔改内容；▲▼ 调整故障转移的尝试顺序；长按或双击 × 才会删除。</p>
                 </div>
             )}
 

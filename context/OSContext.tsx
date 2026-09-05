@@ -354,6 +354,7 @@ interface OSContextType {
   addApiPreset: (name: string, config: APIConfig) => void;
   updateApiPreset: (id: string, name: string, config: APIConfig) => void;
   removeApiPreset: (id: string) => void;
+  moveApiPreset: (id: string, dir: 'up' | 'down') => void;
 
   // 实时配置 (天气、新闻、Notion等)
   realtimeConfig: RealtimeConfig;
@@ -3164,6 +3165,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const addApiPreset = (name: string, config: APIConfig) => { setApiPresets(prev => { const next = [...prev, normalizeApiPreset({ id: Date.now().toString(), name, config })]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const updateApiPreset = (id: string, name: string, config: APIConfig) => { setApiPresets(prev => { const next = prev.map(p => p.id === id ? normalizeApiPreset({ ...p, name, config }) : p); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const removeApiPreset = (id: string) => { setApiPresets(prev => { const next = prev.filter(p => p.id !== id); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
+  // 预设手动排序：故障转移候选顺序 = 预设数组顺序，这里交换相邻后立即写盘
+  const moveApiPreset = (id: string, dir: 'up' | 'down') => { setApiPresets(prev => { const i = prev.findIndex(p => p.id === id); const j = dir === 'up' ? i - 1 : i + 1; if (i < 0 || j < 0 || j >= prev.length) return prev; const next = [...prev]; [next[i], next[j]] = [next[j], next[i]]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const savePresets = (presets: ApiPreset[]) => { const normalized = presets.map(normalizeApiPreset); setApiPresets(normalized); localStorage.setItem('os_api_presets', JSON.stringify(normalized)); };
   const addCharacter = async () => {
     const name = 'New Character';
@@ -5383,6 +5386,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     addApiPreset,
     updateApiPreset,
     removeApiPreset,
+    moveApiPreset,
     realtimeConfig,
     updateRealtimeConfig,
     memoryPalaceConfig,

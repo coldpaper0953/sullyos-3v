@@ -98,6 +98,19 @@ export async function snapshotLocalStorageMirror(): Promise<void> {
 
 let listenersAttached = false;
 
+// 写穿防抖：镜像键被写入后 2s 内自动补一张快照。
+// 没有它，快照只发生在启动/切后台/pagehide/每 5 分钟——手机上「改完配置立刻
+// 杀进程」（重启手机/划掉浏览器，pagehide 不保证触发）会丢最后一次修改，
+// 重启后镜像救回来的就是改之前的旧配置。
+let snapTimer: ReturnType<typeof setTimeout> | null = null;
+const scheduleSnapshot = () => {
+    if (snapTimer) return;
+    snapTimer = setTimeout(() => {
+        snapTimer = null;
+        void snapshotLocalStorageMirror();
+    }, 2000);
+};
+
 /**
  * 应用启动时调一次：先回填、再拍一张新快照，并挂上"页面隐藏 / 关闭 / 定时"的快照钩子。
  * 返回回填的键名，调用方可据此提示用户"本地设置曾丢失，已自动恢复"。
@@ -114,6 +127,13 @@ export async function initLocalStorageMirror(): Promise<string[]> {
         });
         window.addEventListener('pagehide', snap);
         setInterval(snap, SNAPSHOT_INTERVAL_MS);
+        // 写穿钩子：镜像键的任何 setItem 都排一次防抖快照（removeItem 不挂——
+        // 个别键"删除=恢复默认"的复活窗口维持原设计注释里的取舍）。
+        const originalSetItem = localStorage.setItem.bind(localStorage);
+        localStorage.setItem = function (key: string, value: string) {
+            originalSetItem(key, String(value));
+            if ((MIRRORED_KEYS as readonly string[]).includes(key)) scheduleSnapshot();
+        };
     }
     return restored;
 }

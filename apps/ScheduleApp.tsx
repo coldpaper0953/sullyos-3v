@@ -522,7 +522,7 @@ const ScheduleApp: React.FC = () => {
                                  {anniversaries.map(a => (
                                      <div key={a.id} className="relative group">
                                          <div className={`absolute -left-[20px] top-4 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-[#f6f3ec] border-2 border-[#7d7264]' : 'bg-pink-400'}`}></div>
-                                         <div className="bg-white/50 backdrop-blur-sm border border-[#7d7264]/20 rounded-xl shadow-none p-4 flex justify-between items-center transition-colors">
+                                         <div className="bg-[#f6f3ec]/80 border border-[#7d7264]/15 rounded-xl p-4 flex justify-between items-center transition-colors">
                                              <div>
                                                  <div className={`text-sm font-bold ${theme.text}`}>{a.title}</div>
                                                  <div className={`text-[10px] ${theme.textSub} font-mono mt-1`}>{a.date} · {characters.find(c => c.id === a.charId)?.name}</div>
@@ -539,10 +539,16 @@ const ScheduleApp: React.FC = () => {
                              <h3 className={`text-xs font-bold uppercase tracking-widest mb-6 -ml-6 pl-6 pt-4 ${theme.textSub}`}>完成履历</h3>
                              <div className="space-y-4">
                                  {tasks.filter(t => t.isCompleted).sort((a,b) => (b.completedAt || 0) - (a.completedAt || 0)).map(t => (
-                                     <div key={t.id} className="relative">
-                                         <div className={`absolute -left-[20px] top-2 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-[#f6f3ec] border-2 border-[#8a7350]' : 'bg-slate-300'}`}></div>
-                                         <div className={`text-xs ${theme.textSub} font-mono`}>[{new Date(t.completedAt || 0).toLocaleDateString()}] 任务完成</div>
-                                         <div className={`text-sm ${theme.text} font-bold mt-1 pl-1 border-l-2 ${theme.decoLine}`}>{t.title}</div>
+                                     <div key={t.id} className="relative group">
+                                         <div className={`absolute -left-[20px] top-3 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-[#f6f3ec] border-2 border-[#8a7350]' : 'bg-slate-300'}`}></div>
+                                         {/* 与上方时间线事件同款相似卡片 */}
+                                         <div className="bg-[#f6f3ec]/80 border border-[#7d7264]/15 rounded-xl p-3 flex items-center justify-between transition-colors">
+                                             <div>
+                                                 <div className={`text-[10px] ${theme.textSub} font-mono`}>[{new Date(t.completedAt || 0).toLocaleDateString()}] 任务完成</div>
+                                                 <div className={`text-sm font-bold mt-0.5 ${theme.text}`}>{t.title}</div>
+                                             </div>
+                                             <button onClick={() => handleDeleteTask(t.id)} className="text-slate-400 hover:text-red-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity text-xs">DEL</button>
+                                         </div>
                                      </div>
                                  ))}
                              </div>

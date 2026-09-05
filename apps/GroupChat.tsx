@@ -588,6 +588,7 @@ const GroupChat: React.FC = () => {
     const groupAvatarInputRef = useRef<HTMLInputElement>(null);
     // + 面板功能块排序：用户自定义顺序存 localStorage，新功能默认排尾部
     const [sortActions, setSortActions] = useState(false);
+    const [swapFirst, setSwapFirst] = useState<string | null>(null);
     const [actionOrder, setActionOrder] = useState<string[]>(() => {
         try { return JSON.parse(localStorage.getItem('groupchat_actions_order') || '[]'); } catch { return []; }
     });
@@ -1832,16 +1833,18 @@ ${memberTimeline || '(暂无互动记录)'}
         const rest = DEFAULT_ACTION_ORDER.filter(id => !actionOrder.includes(id));
         return [...known, ...rest];
     })();
-    const moveActionTile = (id: string, dir: 'top' | 'up' | 'down') => {
-        const cur = orderedActionIds;
-        const i = cur.indexOf(id);
-        const next = [...cur];
-        if (dir === 'top') { next.splice(i, 1); next.unshift(id); }
-        else if (dir === 'up' && i > 0) { [next[i - 1], next[i]] = [next[i], next[i - 1]]; }
-        else if (dir === 'down' && i < next.length - 1) { [next[i + 1], next[i]] = [next[i], next[i + 1]]; }
-        else return;
+    // 排序交互：点选第一个块（高亮）→ 再点另一个 → 两块互换位置
+    const handleSwapTap = (id: string) => {
+        if (!swapFirst) { setSwapFirst(id); return; }
+        if (swapFirst === id) { setSwapFirst(null); return; }
+        const next = [...orderedActionIds];
+        const a = next.indexOf(swapFirst);
+        const b = next.indexOf(id);
+        if (a < 0 || b < 0) { setSwapFirst(null); return; }
+        [next[a], next[b]] = [next[b], next[a]];
         setActionOrder(next);
         try { localStorage.setItem('groupchat_actions_order', JSON.stringify(next)); } catch { /* ignore */ }
+        setSwapFirst(null);
     };
 
     const renderActionTile = (id: string) => {
@@ -2140,10 +2143,10 @@ ${memberTimeline || '(暂无互动记录)'}
                 acnh={acnh}
                 actionsContent={
                     <div className="p-6 grid grid-cols-4 gap-8">
-                        {/* 排序开关：常用功能可置顶/调序，顺序记在本地 */}
+                        {/* 排序开关：点两个功能块互换位置，顺序记在本地 */}
                         <div className="col-span-4 flex items-center justify-between -mt-2 mb-1">
-                            <span className="text-[10px] text-slate-400">{sortActions ? '「顶」移到最前，↑↓ 微调顺序' : '常用功能可排序置顶'}</span>
-                            <button onClick={() => setSortActions(v => !v)} className={`text-[10px] font-bold px-3 py-1 rounded-full transition-all ${sortActions ? 'bg-violet-500 text-white' : 'bg-violet-50 text-violet-500'}`}>
+                            <span className="text-[10px] text-slate-400">{sortActions ? '先点一个块，再点另一个，两块互换' : '常用功能可排序置顶'}</span>
+                            <button onClick={() => { setSortActions(v => !v); setSwapFirst(null); }} className={`text-[10px] font-bold px-3 py-1 rounded-full transition-all ${sortActions ? 'bg-violet-500 text-white' : 'bg-violet-50 text-violet-500'}`}>
                                 {sortActions ? '完成排序' : '排序'}
                             </button>
                         </div>
@@ -2151,11 +2154,11 @@ ${memberTimeline || '(暂无互动记录)'}
                             <div key={id} className="relative">
                                 {renderActionTile(id)}
                                 {sortActions && (
-                                    <div className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 bg-white/80 rounded-2xl">
-                                        <button onClick={() => moveActionTile(id, 'top')} className="w-7 h-7 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center" title="置顶">顶</button>
-                                        <button onClick={() => moveActionTile(id, 'up')} className="w-7 h-7 rounded-full bg-white border border-violet-200 text-violet-500 text-[11px] font-bold flex items-center justify-center" title="上移">↑</button>
-                                        <button onClick={() => moveActionTile(id, 'down')} className="w-7 h-7 rounded-full bg-white border border-violet-200 text-violet-500 text-[11px] font-bold flex items-center justify-center" title="下移">↓</button>
-                                    </div>
+                                    <button
+                                        onClick={() => handleSwapTap(id)}
+                                        className={`absolute inset-0 z-10 rounded-2xl transition-all ${swapFirst === id ? 'bg-violet-200/70 ring-2 ring-violet-500' : 'bg-transparent'}`}
+                                        title={swapFirst === id ? '再点另一个功能块交换' : '选中它'}
+                                    />
                                 )}
                             </div>
                         ))}
