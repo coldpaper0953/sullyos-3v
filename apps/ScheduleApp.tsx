@@ -15,29 +15,27 @@ import { useLocalDateKey } from '../hooks/useLocalDateKey';
 import { trackEvent } from '../utils/analytics';
 import TokenImg from '../components/os/TokenImg';
 
-const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
-const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
-
 type ThemeMode = 'cyber' | 'soft' | 'minimal';
 
 // Theme Configuration Definitions
 const THEMES: Record<ThemeMode, any> = {
     cyber: {
         id: 'cyber',
-        bg: 'bg-[#0f172a]',
-        text: 'text-slate-200',
-        textSub: 'text-slate-500',
-        accent: 'text-cyan-400',
-        border: 'border-cyan-900/30',
-        card: 'bg-slate-900/50 backdrop-blur-md border border-slate-700/50',
-        buttonPrimary: 'bg-cyan-600 hover:bg-cyan-500 text-white rounded-none skew-x-[-10deg]',
-        font: 'font-mono',
-        iconDone: 'text-green-500',
-        decoLine: 'bg-slate-800',
-        modalBg: 'bg-[#0f172a] border border-cyan-500',
-        input: 'bg-slate-800 text-white border-none rounded-none',
-        label: 'QUEST LOG',
-        eventLabel: 'SERVER EVENTS'
+        // 米黄像素风（对齐主界面）：原赛博深蓝在此被整体替换，id 保留以免动主题切换逻辑
+        bg: 'bg-[#eadfce]',
+        text: 'text-[#6a4c35]',
+        textSub: 'text-[#9b8677]',
+        accent: 'text-[#a16207]',
+        border: 'border-[#8f674a]/30',
+        card: 'bg-[#f8f0e0] border-2 border-[#8f674a]/40 rounded-[4px] shadow-[0_2px_0_rgba(123,90,64,0.15)]',
+        buttonPrimary: 'bg-[#c99872] hover:bg-[#b07d57] text-[#fff7ed] border-2 border-[#8f674a] rounded-[4px]',
+        font: 'font-sans',
+        iconDone: 'text-[#a16207]',
+        decoLine: 'bg-[#8f674a]/30',
+        modalBg: 'bg-[#f8f0e0] border-2 border-[#8f674a]',
+        input: 'bg-[#f8f0e0] text-[#6a4c35] border-2 border-[#8f674a]/50 rounded-[4px]',
+        label: '任务',
+        eventLabel: '纪念日'
     },
     soft: {
         id: 'soft',
@@ -373,12 +371,12 @@ const ScheduleApp: React.FC = () => {
     return (
         <div className={`h-full w-full flex flex-col ${theme.font} ${theme.bg} ${theme.text} relative overflow-hidden transition-colors duration-500`}>
              
-             {/* Tech Background Grid (Only for Cyber) */}
+             {/* 米黄网格背景（原赛博青蓝网格换暖棕） */}
              {currentThemeMode === 'cyber' && (
-                 <div className="absolute inset-0 pointer-events-none opacity-20" 
-                      style={{ 
-                          backgroundImage: 'linear-gradient(rgba(56, 189, 248, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(56, 189, 248, 0.1) 1px, transparent 1px)', 
-                          backgroundSize: '40px 40px' 
+                 <div className="absolute inset-0 pointer-events-none opacity-20"
+                      style={{
+                          backgroundImage: 'linear-gradient(rgba(143, 103, 74, 0.12) 1px, transparent 1px), linear-gradient(90deg, rgba(143, 103, 74, 0.12) 1px, transparent 1px)',
+                          backgroundSize: '40px 40px'
                       }}>
                  </div>
              )}
@@ -401,47 +399,47 @@ const ScheduleApp: React.FC = () => {
                 </button>
 
                 {/* Tabs */}
-                <div className={`flex gap-1 p-1 rounded-lg ${currentThemeMode === 'cyber' ? 'bg-black/40 border border-cyan-900/50' : (currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : 'bg-white/50')}`}>
-                    <button onClick={() => { setActiveTab('quest'); trackEvent('切换日程标签页', { tab: 'quest' }); }} className={`px-4 py-1.5 rounded text-xs font-bold transition-all ${activeTab === 'quest' ? `${theme.accent} ${currentThemeMode === 'cyber' ? 'bg-cyan-900/50 shadow-sm' : (currentThemeMode === 'minimal' ? 'shadow-[2px_2px_5px_#d1d9e6,-2px_-2px_5px_#ffffff] bg-[#eef2f6]' : 'bg-white shadow-sm')}` : `${theme.textSub}`}`}>{theme.label}</button>
-                    <button onClick={() => { setActiveTab('server_events'); trackEvent('切换日程标签页', { tab: 'server_events' }); }} className={`px-4 py-1.5 rounded text-xs font-bold transition-all ${activeTab === 'server_events' ? `${theme.accent} ${currentThemeMode === 'cyber' ? 'bg-cyan-900/50 shadow-sm' : (currentThemeMode === 'minimal' ? 'shadow-[2px_2px_5px_#d1d9e6,-2px_-2px_5px_#ffffff] bg-[#eef2f6]' : 'bg-white shadow-sm')}` : `${theme.textSub}`}`}>{theme.eventLabel}</button>
+                <div className={`flex gap-1 p-1 rounded-lg ${currentThemeMode === 'cyber' ? 'bg-[#f3e7d6] border-2 border-[#8f674a]/30' : (currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : 'bg-white/50')}`}>
+                    <button onClick={() => { setActiveTab('quest'); trackEvent('切换日程标签页', { tab: 'quest' }); }} className={`px-4 py-1.5 rounded text-xs font-bold transition-all ${activeTab === 'quest' ? `${theme.accent} ${currentThemeMode === 'cyber' ? 'bg-[#f8f0e0] border border-[#8f674a]/40' : (currentThemeMode === 'minimal' ? 'shadow-[2px_2px_5px_#d1d9e6,-2px_-2px_5px_#ffffff] bg-[#eef2f6]' : 'bg-white shadow-sm')}` : `${theme.textSub}`}`}>{theme.label}</button>
+                    <button onClick={() => { setActiveTab('server_events'); trackEvent('切换日程标签页', { tab: 'server_events' }); }} className={`px-4 py-1.5 rounded text-xs font-bold transition-all ${activeTab === 'server_events' ? `${theme.accent} ${currentThemeMode === 'cyber' ? 'bg-[#f8f0e0] border border-[#8f674a]/40' : (currentThemeMode === 'minimal' ? 'shadow-[2px_2px_5px_#d1d9e6,-2px_-2px_5px_#ffffff] bg-[#eef2f6]' : 'bg-white shadow-sm')}` : `${theme.textSub}`}`}>{theme.eventLabel}</button>
                 </div>
 
                 {/* Right Actions */}
                 <div className="flex gap-2">
-                    {/* Theme Switcher */}
-                    <button onClick={toggleTheme} className={`p-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'bg-white/10 hover:bg-white/20'}`}>
-                        {currentThemeMode === 'cyber' && <img src={twemojiUrl('1f47e')} alt="alien" className="w-5 h-5" />}
-                        {currentThemeMode === 'soft' && <img src={twemojiUrl('1f338')} alt="blossom" className="w-5 h-5" />}
-                        {currentThemeMode === 'minimal' && <img src={twemojiUrl('26aa')} alt="circle" className="w-5 h-5" />}
+                    {/* Theme Switcher（三色小圆点，不用 emoji） */}
+                    <button onClick={toggleTheme} className={`p-2 rounded-full active:scale-90 transition-transform flex items-center justify-center ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] bg-[#eef2f6]' : 'bg-[#f8f0e0] border-2 border-[#8f674a]/30 hover:bg-[#fff7ed]'}`}>
+                        {currentThemeMode === 'cyber' && <span className="w-3 h-3 rounded-full bg-[#c99872] border border-[#8f674a]/50"></span>}
+                        {currentThemeMode === 'soft' && <span className="w-3 h-3 rounded-full bg-pink-400"></span>}
+                        {currentThemeMode === 'minimal' && <span className="w-3 h-3 rounded-full bg-slate-400"></span>}
                     </button>
 
                     {/* Add Button */}
-                    <button onClick={() => { activeTab === 'quest' ? setShowTaskModal(true) : setShowAnniModal(true); trackEvent('打开新建条目弹窗', { kind: activeTab }); }} className={`p-2 rounded-full active:scale-90 transition-transform ${theme.accent} ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-white/10'}`}>
+                    <button onClick={() => { activeTab === 'quest' ? setShowTaskModal(true) : setShowAnniModal(true); trackEvent('打开新建条目弹窗', { kind: activeTab }); }} className={`p-2 rounded-full active:scale-90 transition-transform ${theme.accent} ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-[#fff7ed]'}`}>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                     </button>
                 </div>
                 </div>
 
                 {/* Decoration Line */}
-                {currentThemeMode === 'cyber' && <div className="absolute bottom-0 left-0 h-[1px] w-full bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent"></div>}
+                {currentThemeMode === 'cyber' && <div className="absolute bottom-0 left-0 h-[2px] w-full bg-gradient-to-r from-transparent via-[#c99872] to-transparent"></div>}
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar p-6 space-y-8 z-10">
                 
                 {/* Hero Anniversary Card */}
                 {upcomingAnni && (
-                    <div className={`w-full rounded-2xl p-5 relative overflow-hidden group transition-all duration-300 ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_5px_5px_10px_#d1d9e6,inset_-5px_-5px_10px_#ffffff]' : (currentThemeMode === 'soft' ? 'bg-gradient-to-r from-pink-300 to-purple-300 text-white shadow-lg shadow-pink-200' : 'bg-gradient-to-r from-slate-900 to-slate-800 border border-purple-500/30')}`}>
+                    <div className={`w-full rounded-2xl p-5 relative overflow-hidden group transition-all duration-300 ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_5px_5px_10px_#d1d9e6,inset_-5px_-5px_10px_#ffffff]' : (currentThemeMode === 'soft' ? 'bg-gradient-to-r from-pink-300 to-purple-300 text-white shadow-lg shadow-pink-200' : 'bg-[#f8f0e0] border-2 border-[#8f674a]/40 text-[#6a4c35] shadow-[0_2px_0_rgba(123,90,64,0.15)]')}`}>
                         <div className="relative z-10">
                             <div className="flex justify-between items-start mb-2">
-                                <div className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${currentThemeMode === 'minimal' ? 'text-slate-400' : 'text-white/80 bg-white/20'}`}>即将到来</div>
+                                <div className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${currentThemeMode === 'minimal' ? 'text-slate-400' : (currentThemeMode === 'cyber' ? 'text-[#9b8677] bg-[#eadfce]' : 'text-white/80 bg-white/20')}`}>即将到来</div>
                                 <div className="text-3xl font-bold tracking-tighter">{getDaysUntil(upcomingAnni.date)} <span className="text-xs opacity-60 font-normal">天后</span></div>
                             </div>
                             <div className="text-xl font-bold mb-4">{upcomingAnni.title}</div>
                             
                             {/* AI Thought Bubble */}
-                            <div className={`flex items-start gap-3 p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[5px_5px_10px_#d1d9e6,-5px_-5px_10px_#ffffff]' : 'bg-white/20 backdrop-blur-md'}`}>
+                            <div className={`flex items-start gap-3 p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[5px_5px_10px_#d1d9e6,-5px_-5px_10px_#ffffff]' : (currentThemeMode === 'cyber' ? 'bg-[#eadfce]' : 'bg-white/20 backdrop-blur-md')}`}>
                                 <TokenImg value={characters.find(c => c.id === upcomingAnni.charId)?.avatar} className="w-8 h-8 rounded-full object-cover" />
-                                <div className={`text-xs font-medium leading-relaxed italic ${currentThemeMode === 'minimal' ? 'text-slate-500' : 'text-white/90'}`}>
+                                <div className={`text-xs font-medium leading-relaxed italic ${currentThemeMode === 'minimal' ? 'text-slate-500' : (currentThemeMode === 'cyber' ? 'text-[#6a4c35]' : 'text-white/90')}`}>
                                     "{upcomingAnni.aiThought || "加载中..."}"
                                 </div>
                             </div>
@@ -452,12 +450,12 @@ const ScheduleApp: React.FC = () => {
                 {activeTab === 'quest' && (
                     <div className="space-y-4">
                         <div className="flex items-center gap-2 mb-2 px-1">
-                            <div className={`w-2 h-2 rounded-full animate-pulse ${currentThemeMode === 'cyber' ? 'bg-cyan-500' : (currentThemeMode === 'soft' ? 'bg-pink-400' : 'bg-slate-400')}`}></div>
+                            <div className={`w-2 h-2 rounded-full animate-pulse ${currentThemeMode === 'cyber' ? 'bg-[#c99872]' : (currentThemeMode === 'soft' ? 'bg-pink-400' : 'bg-slate-400')}`}></div>
                             <h3 className={`text-xs font-bold uppercase tracking-[0.2em] ${theme.accent}`}>进行中任务</h3>
                         </div>
                         
                         {tasks.filter(t => !t.isCompleted).length === 0 && (
-                            <div className={`text-center py-12 border-2 border-dashed rounded-xl ${currentThemeMode === 'cyber' ? 'border-slate-800' : 'border-slate-200'}`}>
+                            <div className={`text-center py-12 border-2 border-dashed rounded-xl ${currentThemeMode === 'cyber' ? 'border-[#8f674a]/40' : 'border-slate-200'}`}>
                                 <div className={theme.textSub}>暂无任务</div>
                             </div>
                         )}
@@ -471,7 +469,7 @@ const ScheduleApp: React.FC = () => {
                                     {/* Supervisor Icon */}
                                     <div className="w-12 h-12 rounded-full overflow-hidden shrink-0 relative border border-white/10">
                                         {supervisor ? <TokenImg value={supervisor.avatar} className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity" /> : <span className="text-xs">?</span>}
-                                        <div className={`absolute -bottom-0 -right-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${currentThemeMode === 'soft' ? 'bg-white text-pink-500' : 'bg-black text-cyan-500'}`}>!</div>
+                                        <div className={`absolute -bottom-0 -right-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${currentThemeMode === 'soft' ? 'bg-white text-pink-500' : 'bg-[#c99872] text-[#fff7ed]'}`}>!</div>
                                     </div>
                                     
                                     <div className="flex-1">
@@ -490,7 +488,7 @@ const ScheduleApp: React.FC = () => {
                                     ) : (
                                         <button 
                                             onClick={() => handleToggleTask(task)}
-                                            className={`px-4 py-2 text-[10px] font-bold uppercase tracking-wider rounded transition-all active:scale-95 ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] text-slate-500 active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : (currentThemeMode === 'soft' ? 'bg-pink-100 text-pink-500' : 'bg-cyan-900/30 text-cyan-400 border border-cyan-800')}`}
+                                            className={`px-4 py-2 text-[10px] font-bold uppercase tracking-wider rounded transition-all active:scale-95 ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] text-slate-500 active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : (currentThemeMode === 'soft' ? 'bg-pink-100 text-pink-500' : 'bg-[#f8f0e0] text-[#a16207] border-2 border-[#8f674a]/40')}`}
                                         >
                                             完成
                                         </button>
@@ -505,7 +503,7 @@ const ScheduleApp: React.FC = () => {
                             <div className="pt-8 opacity-50">
                                 <h3 className={`text-xs font-bold uppercase tracking-[0.2em] px-1 mb-4 ${theme.textSub}`}>已完成</h3>
                                 {tasks.filter(t => t.isCompleted).map(task => (
-                                    <div key={task.id} className={`flex items-center gap-3 py-2 px-2 border-b ${currentThemeMode === 'cyber' ? 'border-slate-800/50' : 'border-slate-100'}`}>
+                                    <div key={task.id} className={`flex items-center gap-3 py-2 px-2 border-b ${currentThemeMode === 'cyber' ? 'border-[#8f674a]/20' : 'border-slate-100'}`}>
                                         <div className={`${theme.iconDone} text-xs font-mono`}>[DONE]</div>
                                         <span className={`text-sm line-through ${theme.textSub}`}>{task.title}</span>
                                         <button onClick={() => handleDeleteTask(task.id)} className="ml-auto text-slate-400 hover:text-red-500 text-xs">DEL</button>
@@ -524,7 +522,7 @@ const ScheduleApp: React.FC = () => {
                              <div className="space-y-4">
                                  {anniversaries.map(a => (
                                      <div key={a.id} className="relative group">
-                                         <div className={`absolute -left-[20px] top-4 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-black border border-purple-500' : 'bg-pink-400'}`}></div>
+                                         <div className={`absolute -left-[20px] top-4 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-[#f8f0e0] border-2 border-[#8f674a]' : 'bg-pink-400'}`}></div>
                                          <div className={`${theme.card} p-4 flex justify-between items-center transition-colors`}>
                                              <div>
                                                  <div className={`text-sm font-bold ${theme.text}`}>{a.title}</div>
@@ -543,7 +541,7 @@ const ScheduleApp: React.FC = () => {
                              <div className="space-y-4">
                                  {tasks.filter(t => t.isCompleted).sort((a,b) => (b.completedAt || 0) - (a.completedAt || 0)).map(t => (
                                      <div key={t.id} className="relative">
-                                         <div className={`absolute -left-[20px] top-2 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-black border border-green-600' : 'bg-slate-300'}`}></div>
+                                         <div className={`absolute -left-[20px] top-2 w-2 h-2 rounded-full z-10 ${currentThemeMode === 'cyber' ? 'bg-[#f8f0e0] border-2 border-[#a16207]' : 'bg-slate-300'}`}></div>
                                          <div className={`text-xs ${theme.textSub} font-mono`}>[{new Date(t.completedAt || 0).toLocaleDateString()}] 任务完成</div>
                                          <div className={`text-sm ${theme.text} font-bold mt-1 pl-1 border-l-2 ${theme.decoLine}`}>{t.title}</div>
                                      </div>
@@ -556,7 +554,7 @@ const ScheduleApp: React.FC = () => {
             </div>
 
             {/* Task Modal */}
-            <Modal isOpen={showTaskModal} title={currentThemeMode === 'cyber' ? "INITIALIZE QUEST" : "新建任务"} onClose={() => setShowTaskModal(false)} footer={<button onClick={handleAddTask} className={`w-full py-3 font-bold transition-all ${theme.buttonPrimary}`}>确认添加</button>}>
+            <Modal isOpen={showTaskModal} title="新建任务" onClose={() => setShowTaskModal(false)} footer={<button onClick={handleAddTask} className={`w-full py-3 font-bold transition-all ${theme.buttonPrimary}`}>确认添加</button>}>
                 <div className={`space-y-6 ${currentThemeMode === 'minimal' ? 'p-2' : ''}`}>
                     <input autoFocus value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} placeholder="任务目标 (例如: 背单词)" className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
                     
@@ -578,7 +576,7 @@ const ScheduleApp: React.FC = () => {
             </Modal>
 
             {/* Anniversary Modal */}
-            <Modal isOpen={showAnniModal} title={currentThemeMode === 'cyber' ? "REGISTER EVENT" : "添加纪念日"} onClose={() => setShowAnniModal(false)} footer={<button onClick={handleAddAnni} className={`w-full py-3 font-bold transition-all ${theme.buttonPrimary}`}>保存记录</button>}>
+            <Modal isOpen={showAnniModal} title="添加纪念日" onClose={() => setShowAnniModal(false)} footer={<button onClick={handleAddAnni} className={`w-full py-3 font-bold transition-all ${theme.buttonPrimary}`}>保存记录</button>}>
                 <div className={`space-y-4 ${currentThemeMode === 'minimal' ? 'p-2' : ''}`}>
                     <input value={newAnniTitle} onChange={e => setNewAnniTitle(e.target.value)} placeholder="事件名称 (例如: 第一次见面)" className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
                     <input type="date" value={newAnniDate} onChange={e => setNewAnniDate(e.target.value)} className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />

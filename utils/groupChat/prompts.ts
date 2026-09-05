@@ -121,6 +121,11 @@ export function buildGroupHistoryBlock(
         const timePrefix = typeof m.timestamp === 'number' ? `[${formatRelativeAge(m.timestamp, now)}] ` : '';
 
         let name = '用户';
+        if (m.role === 'system') {
+            // 系统通知（禁言/解禁等）不进历史块：群头的「群主/管理员/禁言名单」rolesBlock
+            // 已经注入同样信息，历史里再出现会被导演当成用户发言去接话
+            return;
+        }
         if (m.role === 'assistant') {
             name = characters.find(c => c.id === m.charId)?.name || '未知';
         }

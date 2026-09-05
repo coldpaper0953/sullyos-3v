@@ -19,7 +19,11 @@ export function planGroupTopicBatch(
     archivedThroughMessageId: number = 0,
     force: boolean = false,
 ): GroupTopicBatch | null {
+    // 群聊侧的语义过滤：在共享的 isMessageSemanticallyRelevant 之外，把系统通知（禁言/解禁）
+    // 排除出成盒范围——总结 prompt 会把它们错标成"未知成员"写进全员长期话题盒。
+    // 只在这里排除，不动共享函数：私聊侧的归档依赖它放行 system 类消息。
     const semantic = allMessages
+        .filter(m => m.role !== 'system' && m.type !== 'system')
         .filter(isMessageSemanticallyRelevant)
         .sort((a, b) => a.id - b.id);
     if (semantic.length <= GROUP_TOPIC_HOT_ZONE) return null;
@@ -39,7 +43,9 @@ export function planGroupTopicBatch(
 }
 
 export function groupTopicPendingCount(allMessages: Message[], archivedThroughMessageId: number = 0): number {
-    const semantic = allMessages.filter(isMessageSemanticallyRelevant).sort((a, b) => a.id - b.id);
+    const semantic = allMessages
+        .filter(m => m.role !== 'system' && m.type !== 'system')
+        .filter(isMessageSemanticallyRelevant).sort((a, b) => a.id - b.id);
     if (semantic.length <= GROUP_TOPIC_HOT_ZONE) return 0;
     const hotZoneStartId = semantic[semantic.length - GROUP_TOPIC_HOT_ZONE].id;
     return semantic.filter(m => m.id > archivedThroughMessageId && m.id < hotZoneStartId).length;

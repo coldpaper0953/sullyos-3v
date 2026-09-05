@@ -114,6 +114,19 @@ const GroupPacketCard = ({ msg, nameOf, onOpen }: {
     );
 };
 
+// --- Sub-Component: System Notice（禁言/解禁等系统通知，居中胶囊，对齐私聊系统通知风格） ---
+const SystemNoticeItem = ({ msg }: { msg: Message }) => {
+    const icon = /解除/.test(msg.content) ? '📢' : '🔇';
+    return (
+        <div className="flex justify-center my-4 px-10 w-full animate-fade-in">
+            <div className="flex items-center gap-1.5 bg-slate-200/40 backdrop-blur-md text-slate-500 px-3 py-1 rounded-full shadow-sm border border-white/20 select-none">
+                <span className="text-[11px]">{icon}</span>
+                <span className="text-[10px] font-medium tracking-wide">{msg.content}</span>
+            </div>
+        </div>
+    );
+};
+
 // --- Sub-Component: Group Message Bubble ---
 const GroupMessageItem = React.memo(({
     msg,
@@ -841,13 +854,13 @@ const GroupChat: React.FC = () => {
         else next[charId] = Date.now() + minutes * 60 * 1000;
         await updateGroup(activeGroup.id, { mutedMembers: next });
         setActiveGroup({ ...activeGroup, mutedMembers: next });
-        // 禁言/解除落一条短消息进群，让本轮及之后的 AI 都有语境
+        // 禁言/解除落一条系统通知（居中胶囊展示，不发普通消息；各提示词管线对 role:'system' 已做过滤/标注）
         await DB.saveMessage({
             charId: 'user',
             groupId: activeGroup.id,
-            role: 'user',
-            type: 'text',
-            content: minutes == null ? `（群主解除了对 ${name} 的禁言）` : `（群主将 ${name} 禁言 ${minutes} 分钟）`,
+            role: 'system',
+            type: 'system',
+            content: minutes == null ? `群主解除了对 ${name} 的禁言` : `群主将 ${name} 禁言 ${minutes} 分钟`,
         } as any);
         await refreshMessages(activeGroup.id);
         addToast(minutes == null ? `已解除 ${name} 的禁言` : `已将 ${name} 禁言 ${minutes} 分钟`, 'success');
@@ -1910,6 +1923,11 @@ ${memberTimeline || '(暂无互动记录)'}
                     </div>
                 )}
                 {displayMessages.map((m, i) => {
+                    // 系统通知（禁言/解禁等）：居中胶囊，不进普通气泡组件——
+                    // GroupMessageItem 顶部有 hooks，在这里早退会踩 Rules of Hooks，所以用独立小组件
+                    if (m.role === 'system' || m.type === 'system') {
+                        return <SystemNoticeItem key={m.id || i} msg={m} />;
+                    }
                     const isUser = m.role === 'user';
                     const char = characters.find(c => c.id === m.charId);
                     const prevMessage = i > 0 ? displayMessages[i - 1] : null;

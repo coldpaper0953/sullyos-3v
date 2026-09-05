@@ -47,7 +47,9 @@ export function buildMemberTimeline(opts: MemberTimelineOptions): string {
 
     const tagged = [
         ...privateMsgs.slice(-cap).map(m => ({ m, isGroup: false })),
-        ...groupMsgs.slice(-cap).map(m => ({ m, isGroup: true })),
+        // type:'system' 的群通知（禁言/解禁）不进成员时间线：既挤占 cap 配额，也会被错标成"未知成员"。
+        // 只按 type 过滤不按 role——私聊里的群话题盒通知同为 role:'system'，那些要保留。
+        ...groupMsgs.filter(m => m.type !== 'system').slice(-cap).map(m => ({ m, isGroup: true })),
     ];
     tagged.sort((a, b) => a.m.timestamp - b.m.timestamp);
 

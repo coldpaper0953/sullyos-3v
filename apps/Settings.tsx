@@ -34,7 +34,6 @@ import { ActiveMsgClient } from '../utils/activeMsgClient';
 import VersionInfo from '../components/settings/VersionInfo';
 import { isPushVapidReady } from '../utils/pushVapid';
 import BackendSettings from '../components/settings/BackendSettings';
-import CloudSyncSettings from '../components/settings/CloudSyncSettings';
 import StorageGuardSettings from '../components/settings/StorageGuardSettings';
 import InstallAppSettings from '../components/settings/InstallAppSettings';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
@@ -3533,9 +3532,6 @@ const Settings: React.FC = () => {
 
         {/* ───────── SullyOS 自主后端 ───────── */}
         <BackendSettings />
-
-        {/* ───────── 云端账号同步（Supabase 账号制） ───────── */}
-        <CloudSyncSettings />
 
         {/* ───────── 存储保护（500MB 过载保护 + AI 分层摘要） ───────── */}
         <StorageGuardSettings />

@@ -97,6 +97,8 @@ function makeSpeakerNameOf(members: CharacterProfile[], userName: string) {
     const charIdToName = new Map<string, string>();
     for (const m of members) charIdToName.set(m.id, m.name);
     return (msg: Message): string => {
+        // 系统通知（禁言/解禁）不冒充任何成员；即使漏进提取材料也要标明是系统
+        if (msg.role === 'system' || msg.type === 'system') return '[系统]';
         if (msg.role === 'user') return userName || '用户';
         if (msg.charId) return charIdToName.get(msg.charId) || '群友';
         return '群友';
@@ -191,9 +193,10 @@ export async function processGroupNewMessages(
             return { stored: 0, perMemberStored: {}, reason: 'no_config' };
         }
 
-        // 3. 加载群消息 → 计算热区 / 缓冲区
+        // 3. 加载群消息 → 计算热区 / 缓冲区（系统通知不进记忆提取材料，提取机无从归档）
         const allMsgs = await DB.getGroupMessages(group.id);
         const textMsgs = allMsgs
+            .filter(m => m.role !== 'system' && m.type !== 'system')
             .filter(isMessageSemanticallyRelevant)
             .sort((a, b) => a.id - b.id);
 

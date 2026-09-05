@@ -421,6 +421,8 @@ export const ChatPrompts = {
                 // 发言人标真实名字：匿名成 Member 会让角色分不清哪句是谁说的、
                 // 甚至认不出自己的发言，私聊被问起群里的事就接不住。
                 const speakerOf = (m: Message): string => {
+                    // 群系统通知（禁言/解禁等）保留——成员知道群里管治动态是有益语境，但必须标注为系统，不能冒充"群友"发言
+                    if (m.role === 'system' || m.type === 'system') return '[系统]';
                     if (m.role === 'user') return userProfile.name;
                     if (m.charId === char.id) return `你（${char.name}）`;
                     return getCharNameById(m.charId) || '群友';

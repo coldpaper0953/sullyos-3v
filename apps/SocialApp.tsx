@@ -9,7 +9,7 @@ import { putImageBlob } from '../utils/blobRef';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
-import { House, User, Package, Warning } from '@phosphor-icons/react';
+import { House, User, Package, Warning, PaperPlaneTilt } from '@phosphor-icons/react';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
 import { trackEvent } from '../utils/analytics';
 import TokenImg from '../components/os/TokenImg';
@@ -1126,7 +1126,15 @@ ${identityMap}
                                     placeholder={replyingTo ? `回复 @${replyingTo.authorName}...` : "说点什么..."}
                                     className="bg-transparent text-sm w-full outline-none text-slate-800 placeholder:text-slate-400 disabled:opacity-50"
                                 />
-                                {commentInput.trim() && <button disabled={loadingComments || isReplyingToUser} onClick={handleSendComment} className="text-[#ff2442] font-bold text-sm animate-fade-in disabled:opacity-40">发送</button>}
+                                {/* 评论发送按钮：与聊天发送按钮同款圆形纸飞机（常驻，空输入禁用） */}
+                                <button
+                                    disabled={loadingComments || isReplyingToUser || !commentInput.trim()}
+                                    onClick={handleSendComment}
+                                    className="w-11 h-11 shrink-0 rounded-full bg-primary text-white flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:opacity-40 disabled:shadow-none"
+                                    title="发送评论"
+                                >
+                                    <PaperPlaneTilt className="w-5 h-5" weight="fill" />
+                                </button>
                             </div>
                             <div className="flex gap-5 text-slate-600 shrink-0 items-center">
                                 <div className="flex flex-col items-center gap-0.5">
