@@ -894,7 +894,12 @@ const GroupChat: React.FC = () => {
 
     const handleSendMessage = async (content: string, type: MessageType = 'text', metadata?: any) => {
         if (!activeGroup) return;
-        if (type === 'text' && !content.trim()) return;
+        // 空按催更：输入框没字时点发送 = 顶栏触发按钮（triggerGroupAI 内部拉最新历史）。
+        // 生成中忽略——此时发送按钮本身已经是「停止」，不在这里抢中止职责。
+        if (type === 'text' && !content.trim()) {
+            if (!isTyping) triggerGroupAI();
+            return;
+        }
         // 借用户"发送"手势解锁音频上下文（移动端自动播放策略），稍后 AI 回复时提示音才响得了
         unlockWhiteboxAudio();
         
