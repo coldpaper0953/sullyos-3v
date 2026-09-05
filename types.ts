@@ -3147,6 +3147,12 @@ export interface GroupProfile {
     htmlModeEnabled?: boolean;
     /** HTML 模式自定义提示词（追加在内置提示词之后） */
     htmlModeCustomPrompt?: string;
+    /** 群主（可选 NPC 成员；不设 = 用户自己当群主） */
+    ownerMemberId?: string;
+    /** 管理员成员 id 列表 */
+    adminMemberIds?: string[];
+    /** 禁言中的成员：charId → 禁言截止时间戳（毫秒）。按时间自动失效，构建提示词时现查现判。 */
+    mutedMembers?: Record<string, number>;
 }
 
 export interface GroupTopicBox {

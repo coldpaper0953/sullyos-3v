@@ -19,6 +19,7 @@ import { parseDirectorActions, stripSkipMarker, parseGroupTopicBox } from '../ut
 import { GroupPacketMeta, PacketReceiptMeta, ClaimResult, claimPacket, effectivePacketStatus, makePacketMeta } from '../utils/groupChat/redpacket';
 import { messageLogText } from '../utils/groupChat/format';
 import { trackEvent } from '../utils/analytics';
+import { announceChatGen, CHAT_GEN_EVENTS } from '../utils/chatGenEvents';
 import { markAmsgStateDirty } from '../utils/amsgStateSync';
 import { buildMemberTimeline, DEFAULT_MEMBER_TIMELINE_CAP } from '../utils/groupChat/timeline';
 import { buildEmojiContextStr, buildGroupHistoryBlock, buildDirectorInstruction, buildRoundRobinInstruction, GroupHistoryBlock } from '../utils/groupChat/prompts';
@@ -809,6 +810,49 @@ const GroupChat: React.FC = () => {
         addToast('群信息已更新', 'success');
     };
 
+    // --- Logic: 成员管理（群主 / 管理员 / 禁言）---
+
+    const handleSetOwner = async (charId: string | null) => {
+        if (!activeGroup) return;
+        await updateGroup(activeGroup.id, { ownerMemberId: charId || undefined });
+        setActiveGroup({ ...activeGroup, ownerMemberId: charId || undefined });
+        if (charId) {
+            const name = characters.find(c => c.id === charId)?.name || '成员';
+            addToast(`已将 ${name} 设为群主`, 'success');
+        }
+    };
+
+    const handleToggleAdmin = async (charId: string) => {
+        if (!activeGroup) return;
+        const next = (activeGroup.adminMemberIds || []).includes(charId)
+            ? (activeGroup.adminMemberIds || []).filter(id => id !== charId)
+            : [...(activeGroup.adminMemberIds || []), charId];
+        await updateGroup(activeGroup.id, { adminMemberIds: next });
+        setActiveGroup({ ...activeGroup, adminMemberIds: next });
+        const name = characters.find(c => c.id === charId)?.name || '成员';
+        addToast(next.includes(charId) ? `已将 ${name} 设为管理员` : `已撤销 ${name} 的管理员`, 'success');
+    };
+
+    const handleSetMute = async (charId: string, minutes: number | null) => {
+        if (!activeGroup) return;
+        const next = { ...(activeGroup.mutedMembers || {}) };
+        const name = characters.find(c => c.id === charId)?.name || '该成员';
+        if (minutes == null) delete next[charId];
+        else next[charId] = Date.now() + minutes * 60 * 1000;
+        await updateGroup(activeGroup.id, { mutedMembers: next });
+        setActiveGroup({ ...activeGroup, mutedMembers: next });
+        // 禁言/解除落一条短消息进群，让本轮及之后的 AI 都有语境
+        await DB.saveMessage({
+            charId: 'user',
+            groupId: activeGroup.id,
+            role: 'user',
+            type: 'text',
+            content: minutes == null ? `（群主解除了对 ${name} 的禁言）` : `（群主将 ${name} 禁言 ${minutes} 分钟）`,
+        } as any);
+        await refreshMessages(activeGroup.id);
+        addToast(minutes == null ? `已解除 ${name} 的禁言` : `已将 ${name} 禁言 ${minutes} 分钟`, 'success');
+    };
+
     const handleGroupAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !activeGroup) return;
@@ -1139,6 +1183,17 @@ const GroupChat: React.FC = () => {
     // 两种模式共用：系统头（群名/时间/共享场景）。
     // 共享场景块（用户档案 + 共有世界书 + 共有 worldview）——每个角色都"看见"的
     // 舞台只描述一次，避免按成员数 N 倍复制；角色的人设/印象/记忆仍保持完整。
+    // 禁言名单（按时间戳自动失效，到点不再需要任何清理）：返回仍在禁言期内的成员
+    const getActiveMutes = (): Array<{ id: string; name: string; until: number }> => {
+        const muted = activeGroup?.mutedMembers;
+        if (!muted) return [];
+        const now = Date.now();
+        return Object.entries(muted)
+            .filter(([, until]) => until > now)
+            .map(([id, until]) => ({ id, until, name: characters.find(c => c.id === id)?.name || id }))
+            .filter(m => !!activeGroup && activeGroup.members.includes(m.id));
+    };
+
     const buildGroupSystemHeader = (currentMsgs: Message[], groupMembers: CharacterProfile[]) => {
         const lastMsg = currentMsgs[currentMsgs.length - 1];
         const timeGapInfo = lastMsg ? getTimeGapHint(lastMsg.timestamp) : "这是群聊的第一条消息。";
@@ -1150,10 +1205,24 @@ const GroupChat: React.FC = () => {
         const liveMsgs = currentMsgs.filter(m => m.id > (activeGroup?.archivedThroughMessageId || 0));
         const sharedScene = ContextBuilder.buildGroupSharedScene(groupMembers, userProfile, liveMsgs);
 
+        // 群主/管理员/禁言写进群头：角色要知道谁管事、谁此刻不能开口
+        const ownerName = (activeGroup?.ownerMemberId && characters.find(c => c.id === activeGroup.ownerMemberId)?.name) || userProfile.name;
+        const adminNames = (activeGroup?.adminMemberIds || [])
+            .map(id => characters.find(c => c.id === id)?.name)
+            .filter((n): n is string => !!n);
+        const activeMutes = getActiveMutes();
+        const muteHint = activeMutes.length
+            ? `（${activeMutes.map(m => `${m.name} 至 ${new Date(m.until).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 解除`)}）: ${activeMutes.map(m => m.name).join('、')}`
+            : '';
+        const rolesBlock = `群主: ${ownerName}
+管理员: ${adminNames.length ? adminNames.join('、') : '（暂无）'}
+群规: 群主/管理员的决定所有成员必须服从；被禁言的成员本轮绝对不能发言${muteHint}`;
+
         const header = `【系统：群聊模拟器配置】
 当前群名: "${activeGroup?.name}"
 当前系统时间: ${currentTimeStr}
 时间流逝感知: ${timeGapInfo}
+${rolesBlock}
 
 ${sharedScene.text}${activeGroup ? buildGroupTopicContext(activeGroup) : ''}`;
         return { header, sharedScene };
@@ -1364,6 +1433,8 @@ ${memberTimeline || '(暂无互动记录)'}
         setIsTyping(true);
         const abort = new AbortController();
         abortRef.current = abort;
+        // 切出群聊页也能看到「xx 正在回应…」横幅（对齐私聊 chatGenEvents 机制）
+        announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: `group:${activeGroup.id}`, charName: activeGroup.name, ttlMs: 15 * 60 * 1000 });
 
         try {
             // 1. Prepare Group Context
@@ -1434,7 +1505,10 @@ ${memberTimeline || '(暂无互动记录)'}
             }
 
             // Execute Actions（PRIVATE 侧信道/表情/气泡分段/打字延迟在 utils/groupChat/dispatch.ts）
-            await dispatchMemberActions(actions, {
+            // 被禁言成员的发言直接丢弃——提示词之外的双保险，防模型漏看群规
+            const mutedIds = new Set(getActiveMutes().map(m => m.id));
+            const effectiveActions = mutedIds.size > 0 ? actions.filter(a => !mutedIds.has(a.charId)) : actions;
+            await dispatchMemberActions(effectiveActions, {
                 groupId: activeGroup.id,
                 memberIds: activeGroup.members,
                 characters,
@@ -1459,6 +1533,7 @@ ${memberTimeline || '(暂无互动记录)'}
             setIsTyping(false);
             setMcpStatus('');
             abortRef.current = null;
+            announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: `group:${activeGroup.id}`, charName: activeGroup.name });
             // 中途报错 / 用户点停也照打：已经落库的那几条同样进了成员的私聊背景
             markGroupMembersDirty(activeGroup.members);
             runGroupTopicArchive();
@@ -1477,6 +1552,8 @@ ${memberTimeline || '(暂无互动记录)'}
         setIsTyping(true);
         const abort = new AbortController();
         abortRef.current = abort;
+        // 同导演模式：切出页面横幅接棒
+        announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: `group:${activeGroup.id}`, charName: activeGroup.name, ttlMs: 15 * 60 * 1000 });
 
         const failed: string[] = [];
         let tokenPrompt = 0;
@@ -1484,10 +1561,13 @@ ${memberTimeline || '(暂无互动记录)'}
 
         try {
             const groupMembers = characters.filter(c => activeGroup.members.includes(c.id));
+            // 禁言名单在整轮开始时取一次：轮到谁之前判一次，禁言期内的成员直接跳过
+            const mutedIds = new Set(getActiveMutes().map(m => m.id));
             let roundMsgs = [...currentMsgs];
 
             for (const member of groupMembers) {
                 if (abort.signal.aborted) break;
+                if (mutedIds.has(member.id)) continue; // 禁言期内本轮沉默
                 try {
                     // 每位成员基于"此刻"的群历史构建上下文——包含本轮先发言成员的新消息
                     const { header, sharedScene } = buildGroupSystemHeader(roundMsgs, groupMembers);
@@ -1586,6 +1666,7 @@ ${memberTimeline || '(暂无互动记录)'}
             setIsTyping(false);
             setMcpStatus('');
             abortRef.current = null;
+            announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: `group:${activeGroup.id}`, charName: activeGroup.name });
             // 同导演模式：跑到一半被打断也要打脏，已发言成员的话已经落库了
             markGroupMembersDirty(activeGroup.members);
             runGroupTopicArchive();
@@ -1902,6 +1983,7 @@ ${memberTimeline || '(暂无互动记录)'}
                 showPanel={showPanel}
                 setShowPanel={setShowPanel}
                 onSend={() => handleSendMessage(input)}
+                onStop={triggerGroupAI}
                 onDeleteSelected={deleteSelectedMessages}
                 selectedCount={selectedMsgIds.size}
                 emojis={filteredEmojis}
@@ -2025,6 +2107,49 @@ ${memberTimeline || '(暂无互动记录)'}
                                 <div className="text-xs font-bold text-slate-700">轮询模式</div>
                                 <p className="text-[9px] text-slate-400 mt-1 leading-tight">每位成员单独调用一次 API，按顺序逐个发言（每人必发言）。更真实、彻底防串号，但更慢，token 消耗约为导演模式 × 成员数。</p>
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Member Management: 群主 / 管理员 / 禁言 */}
+                    <div className="pt-2 border-t border-slate-100">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">成员管理（群主 / 管理员 / 禁言）</label>
+                        <p className="text-[9px] text-slate-400 mb-2 leading-tight">群主和管理员会写进群提示词，角色知道谁管事；禁言按分钟计时、到点自动解除，生成时导演和轮询都会跳过被禁言的成员。</p>
+                        <div className="space-y-2">
+                            {(activeGroup?.members || []).map(mid => {
+                                const c = characters.find(x => x.id === mid);
+                                if (!c) return null;
+                                const mutedUntil = activeGroup?.mutedMembers?.[mid] || 0;
+                                const isMuted = mutedUntil > Date.now();
+                                const isOwner = activeGroup?.ownerMemberId === mid;
+                                const isAdmin = (activeGroup?.adminMemberIds || []).includes(mid);
+                                return (
+                                    <div key={mid} className="flex items-center gap-1.5 p-2 rounded-xl bg-slate-50 border border-slate-100">
+                                        <TokenImg value={c.avatar} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-xs font-bold text-slate-700 truncate flex items-center gap-1 flex-wrap">
+                                                <span className="truncate">{c.name}</span>
+                                                {isOwner && <span className="text-[8px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">群主</span>}
+                                                {isAdmin && <span className="text-[8px] px-1 py-0.5 rounded bg-violet-100 text-violet-600 shrink-0">管理</span>}
+                                                {isMuted && <span className="text-[8px] px-1 py-0.5 rounded bg-rose-100 text-rose-600 shrink-0">禁言至 {new Date(mutedUntil).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => handleSetOwner(isOwner ? null : mid)} className={`px-2 py-1 rounded-lg text-[9px] font-bold shrink-0 transition-all active:scale-95 ${isOwner ? 'bg-amber-500 text-white' : 'bg-white border border-slate-200 text-slate-500'}`}>群主</button>
+                                        <button onClick={() => handleToggleAdmin(mid)} className={`px-2 py-1 rounded-lg text-[9px] font-bold shrink-0 transition-all active:scale-95 ${isAdmin ? 'bg-violet-500 text-white' : 'bg-white border border-slate-200 text-slate-500'}`}>管理</button>
+                                        {isMuted ? (
+                                            <button onClick={() => handleSetMute(mid, null)} className="px-2 py-1 rounded-lg text-[9px] font-bold bg-rose-500 text-white shrink-0 transition-all active:scale-95">解除</button>
+                                        ) : (
+                                            <select
+                                                value=""
+                                                onChange={e => { const v = parseInt(e.target.value); if (v > 0) handleSetMute(mid, v); e.target.value = ''; }}
+                                                className="text-[9px] font-bold px-1.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-500 outline-none shrink-0"
+                                            >
+                                                <option value="">禁言</option>
+                                                {[5, 10, 30, 60].map(m => <option key={m} value={m}>{m} 分钟</option>)}
+                                            </select>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
 
