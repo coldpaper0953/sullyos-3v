@@ -69,15 +69,43 @@ start_worker() {
 start_web() {
   cd "$repo_root"
   [ -d dist ] || die "缺 dist/ —— 先跑 pnpm run build"
-  launch web node scripts/local-static-server.cjs dist
+  if alive web; then
+    say "web 已在跑 (pid $(cat "$run_dir/web.pid"))"
+    return 1   # 没有新启动，调用方不用开浏览器
+  fi
+  say "起 web"
+  setsid nohup node scripts/local-static-server.cjs dist >>"$run_dir/web.log" 2>&1 &
+  echo $! >"$run_dir/web.pid"
+  sleep 1
+  alive web || die "web 起失败，看 $run_dir/web.log"
+  # 等静态服务器真的在应答再返回，不然浏览器打开是个打不开的页面
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    curl -fsS --max-time 2 "http://127.0.0.1:4173/" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  printf '静态服务器 10 秒内没应答，看 %s/web.log\n' "$run_dir" >&2
+  return 1
+}
+
+open_browser() {
+  local url="http://127.0.0.1:4173"
+  if command -v termux-open >/dev/null 2>&1; then
+    termux-open "$url" 2>/dev/null && { say "已在浏览器打开 $url"; return; }
+  fi
+  if command -v termux-open-url >/dev/null 2>&1; then
+    termux-open-url "$url" 2>/dev/null && { say "已在浏览器打开 $url"; return; }
+  fi
+  say "浏览器没开出来（缺 termux-open，装 Termux:API 可解决），手动访问 $url"
 }
 
 case "${1:-all}" in
-  all)    start_pg; start_api; start_worker; start_web ;;
+  # start_web 在 web 已在跑时返回 1（= 不用开浏览器），用 || true 兜住，
+  # 否则 set -e 会把整个脚本在这里杀掉。
+  all)    start_pg; start_api; start_worker; { start_web && open_browser; } || true ;;
   pg)     start_pg ;;
   api)    start_pg; start_api ;;
   worker) start_pg; start_worker ;;
-  web)    start_web ;;
+  web)    { start_web && open_browser; } || true ;;
   *)      die "用法: bash deploy/termux/start.sh [all|pg|api|worker|web]" ;;
 esac
 
