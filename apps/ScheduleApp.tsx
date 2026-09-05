@@ -406,8 +406,8 @@ const ScheduleApp: React.FC = () => {
 
                 {/* Right Actions */}
                 <div className="flex gap-2">
-                    {/* Theme Switcher（三色小圆点，无描边） */}
-                    <button onClick={toggleTheme} className={`p-2 rounded-full active:scale-90 transition-transform flex items-center justify-center ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] bg-[#eef2f6]' : 'bg-[#f6f3ec] hover:bg-[#faf8f4]'}`}>
+                    {/* Theme Switcher（裸圆点：无底色、无阴影） */}
+                    <button onClick={toggleTheme} className="p-1.5 rounded-full active:scale-90 transition-transform flex items-center justify-center bg-transparent">
                         {currentThemeMode === 'cyber' && <span className="w-3 h-3 rounded-full bg-[#a89880]"></span>}
                         {currentThemeMode === 'soft' && <span className="w-3 h-3 rounded-full bg-pink-400"></span>}
                         {currentThemeMode === 'minimal' && <span className="w-3 h-3 rounded-full bg-slate-400"></span>}
