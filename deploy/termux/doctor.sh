@@ -102,6 +102,25 @@ if [ -f "$env_file" ]; then
   else
     warn "  模型三件套" "缺 ${missing_model[*]}" "在 backend/.env 里填心跳用的模型（OpenAI 兼容，不带 /chat/completions 后缀）。不填也能用，只是角色不会自主活动"
   fi
+
+  # DATABASE_URL 走 Unix socket 的话，验一下那个目录里真有 socket 文件。
+  # Termux 的 postgresql 用 $PREFIX/tmp，不是 Debian 的 /var/run/postgresql；
+  # 写错了要等 migrate 才炸，报 connect ENOENT .../.s.PGSQL.5432。
+  db_url="$(read_env DATABASE_URL)"
+  case "$db_url" in
+    *host=/*)
+      sock_dir="${db_url##*host=}"; sock_dir="${sock_dir%%&*}"
+      if [ -S "$sock_dir/.s.PGSQL.5432" ]; then
+        ok "  DATABASE_URL socket" "$sock_dir"
+      else
+        real_dir="$(psql -d sullyos -tAc 'show unix_socket_directories' 2>/dev/null | cut -d, -f1 | tr -d '[:space:]')"
+        bad "  DATABASE_URL socket" "$sock_dir 里没有 .s.PGSQL.5432" "postgres 实际用的是 ${real_dir:-$PREFIX/tmp}；重跑 bash deploy/termux/setup.sh 会自动校正这一行"
+      fi
+      ;;
+    "") bad "  DATABASE_URL" "空" "重跑 bash deploy/termux/setup.sh" ;;
+    *) ok "  DATABASE_URL" "走 TCP，跳过 socket 检查" ;;
+  esac
+
   port="$(read_env PORT)"; port="${port:-43210}"
 else
   bad "backend/.env" "不存在" "cp deploy/termux/env.example backend/.env"

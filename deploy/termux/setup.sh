@@ -136,8 +136,17 @@ say "5/6 装依赖 + 建 .env + 跑迁移"
 cd "$repo_root/backend"
 pnpm install --frozen-lockfile
 
+# postgres 的 Unix socket 目录各平台不一样：Debian 在 /var/run/postgresql，
+# Termux 的 postgresql 包在 $PREFIX/tmp。硬编码错了就是这个报错：
+#   Error: connect ENOENT .../usr/var/run/postgresql/.s.PGSQL.5432
+# 所以问 postgres 自己。unix_socket_directories 可能是逗号分隔的多个，取第一个。
+socket_dir="$(psql -d sullyos -tAc 'show unix_socket_directories' 2>/dev/null | cut -d, -f1 | tr -d '[:space:]')"
+[ -n "$socket_dir" ] || socket_dir="$PREFIX/tmp"
+db_url="postgresql:///sullyos?host=$socket_dir"
+echo "postgres socket 目录：$socket_dir"
+
 if [ -f .env ]; then
-  echo ".env 已存在，保留不动"
+  echo ".env 已存在，密钥保留不动"
 else
   cp "$repo_root/deploy/termux/env.example" .env
   # 顺手把两个密钥生成好，省得手填
@@ -147,6 +156,13 @@ else
   sed -i "s|^MODEL_VAULT_KEY=$|MODEL_VAULT_KEY=$vault|" .env
   echo "已生成 backend/.env，APP_TOKEN 与 MODEL_VAULT_KEY 已随机填好"
   echo "还需你手填：MODEL_BASE_URL / MODEL_API_KEY / MODEL_NAME"
+fi
+
+# 不管 .env 是新建的还是早就有的，DATABASE_URL 都按实测到的 socket 目录校正一遍。
+# 只动开头就是 DATABASE_URL= 的那一行，注释掉的 TCP 备用行（以 # 开头）不受影响。
+if [ "$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2-)" != "$db_url" ]; then
+  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=$db_url|" .env
+  echo "已把 .env 里的 DATABASE_URL 校正为 $db_url"
 fi
 
 mkdir -p "$(grep '^BACKUP_DIR=' .env | cut -d= -f2-)"
