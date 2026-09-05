@@ -60,6 +60,18 @@ pkg install -y git && git clone https://github.com/coldpaper0953/sullyos-3v.git 
 cd ~/sullyos && git pull && bash deploy/termux/deploy.sh
 ```
 
+### 热更新
+
+电脑端推了新代码之后，手机上**一条命令**更到最新：
+
+```bash
+bash ~/sullyos/deploy/termux/update.sh
+```
+
+`update.sh` 会：`git pull` → 停 api/worker/web（postgres 保留）→ `setup.sh` 重建依赖/前后端/跑迁移 → `start.sh` 起新版。拉完发现没有新提交就什么都不做，想强制重建用 `bash deploy/termux/update.sh force`。构建要几分钟，脚本自己会拿 wake-lock，中途别主动锁屏。
+
+`git pull` 报超时/解析失败：九成是梯子分流规则漏了 github.com——v2rayNG 类把路由切「全局」再跑一遍。
+
 **别 clone 到 `/sdcard` 或 `/storage`。** 共享存储没有 exec 权限也没有真实文件权限，pnpm 和 postgres 都会失败——脚本第一步就会拦住你。
 
 **Termux 装完先 `apt update && apt full-upgrade`。** 全新 bootstrap 的包版本经常跟当前仓库对不上，典型症状是 `libcurl.so` 缺符号，`curl` 和 `git clone` 一起挂。注意用 `apt` 而不是 `pkg`——`pkg` 自己要调 curl，会死在同一个地方。

@@ -1355,7 +1355,10 @@ const Chat: React.FC = () => {
     // --- Actions ---
 
     const handleSendText = async (customContent?: string, customType?: MessageType, metadata?: any) => {
-        if (!char || (!input.trim() && !customContent)) return;
+        if (!char) return;
+        // 空按催更：输入框没字时点发送 = 顶栏 ⚡ 手动触发，不落库任何消息。
+        // handleManualTrigger 自带 isTyping 守卫和 instant/本地分流，语义与 ⚡ 完全一致。
+        if (!input.trim() && !customContent) { handleManualTrigger(); return; }
         // 只累加内存里的计数，这里不发任何请求；页面切走时才按区间报一次。见 utils/analytics.ts
         noteMessageSent();
         // 借用户"发送"这个手势解锁音频上下文，好让稍后 AI 回复时的白框提示音能顺利播放（移动端自动播放策略）。
@@ -3501,7 +3504,9 @@ const Chat: React.FC = () => {
     }), [emojis, activeCategory, hiddenCategoryIds]);
 
     // Memoize ChatInputArea callbacks
-    const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget]);
+    // isTyping 必须在依赖里：空按催更不改 input，不补的话按钮拿到的是过期闭包——
+    // 生成中会重复触发、生成结束后反而点不动。
+    const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget, isTyping]);
     const handleCharSelectCallback = useCallback((id: string) => { setActiveCharacterId(id); setShowPanel('none'); }, []);
     // 角色自定义聊天背景：字段值可能是 blobref 令牌（二进制在 IndexedDB），这里解析成能直接
     // 喂进 CSS url() 的地址；data: / http(s) 之类的非令牌值渲染期原样透传。
