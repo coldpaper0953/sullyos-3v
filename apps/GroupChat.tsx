@@ -28,7 +28,7 @@ import { completeGroupChatWithMcp } from '../utils/groupChat/mcp';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 // 群聊输入区/表情面板已改用共享 ChatInputArea（其表情网格自带 useIncrementalReveal 增量渲染），
 // master 上给旧内联表情抽屉加的增量渲染随旧抽屉一并退役。
-import { UsersThree, Money, GearSix, Image as ImageIcon, ArrowsClockwise, PaintBrush, BellSimpleRinging, Code, Question } from '@phosphor-icons/react';
+import { UsersThree, Money, GearSix, Image as ImageIcon, ArrowsClockwise, PaintBrush, BellSimpleRinging, Code, Question, Camera } from '@phosphor-icons/react';
 import ChatHeaderShell from '../components/chat/ChatHeaderShell';
 import ChatInputArea from '../components/chat/ChatInputArea';
 import TokenImg from '../components/os/TokenImg';
@@ -584,7 +584,13 @@ const GroupChat: React.FC = () => {
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const cameraInputRef = useRef<HTMLInputElement>(null);
     const groupAvatarInputRef = useRef<HTMLInputElement>(null);
+    // + 面板功能块排序：用户自定义顺序存 localStorage，新功能默认排尾部
+    const [sortActions, setSortActions] = useState(false);
+    const [actionOrder, setActionOrder] = useState<string[]>(() => {
+        try { return JSON.parse(localStorage.getItem('groupchat_actions_order') || '[]'); } catch { return []; }
+    });
     // 生成中的取消句柄：非空 = 正在生成，再点触发按钮 = 停止
     const abortRef = useRef<AbortController | null>(null);
     const topicArchiveLockRef = useRef(false);
@@ -1818,6 +1824,122 @@ ${memberTimeline || '(暂无互动记录)'}
     const finalGroupRootStyle = acnh
         ? { backgroundColor: '#F6F0D8', backgroundImage: 'none' }
         : groupChatRootStyle;
+
+    // --- Logic: + 面板功能块排序（置顶/上移/下移，顺序存 localStorage）---
+    const DEFAULT_ACTION_ORDER = ['album', 'camera', 'redpacket', 'settings', 'reroll', 'css', 'sound', 'html'];
+    const orderedActionIds = (() => {
+        const known = actionOrder.filter(id => DEFAULT_ACTION_ORDER.includes(id));
+        const rest = DEFAULT_ACTION_ORDER.filter(id => !actionOrder.includes(id));
+        return [...known, ...rest];
+    })();
+    const moveActionTile = (id: string, dir: 'top' | 'up' | 'down') => {
+        const cur = orderedActionIds;
+        const i = cur.indexOf(id);
+        const next = [...cur];
+        if (dir === 'top') { next.splice(i, 1); next.unshift(id); }
+        else if (dir === 'up' && i > 0) { [next[i - 1], next[i]] = [next[i], next[i - 1]]; }
+        else if (dir === 'down' && i < next.length - 1) { [next[i + 1], next[i]] = [next[i], next[i + 1]]; }
+        else return;
+        setActionOrder(next);
+        try { localStorage.setItem('groupchat_actions_order', JSON.stringify(next)); } catch { /* ignore */ }
+    };
+
+    const renderActionTile = (id: string) => {
+        switch (id) {
+            case 'album':
+                return (
+                    <button onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-pink-50 text-pink-400 border-pink-100">
+                            <ImageIcon className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">相册</span>
+                    </button>
+                );
+            case 'camera':
+                return (
+                    <button onClick={() => cameraInputRef.current?.click()} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-teal-50 text-teal-500 border-teal-100">
+                            <Camera className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">拍照</span>
+                    </button>
+                );
+            case 'redpacket':
+                return (
+                    <button onClick={() => { setModalType('transfer'); setShowPanel('none'); trackEvent('打开发红包面板'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-orange-50 text-orange-400 border-orange-100">
+                            <Money className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">红包</span>
+                    </button>
+                );
+            case 'settings':
+                return (
+                    <button onClick={openGroupSettings} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-violet-50 text-violet-500 border-violet-100">
+                            <GearSix className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">群设置</span>
+                    </button>
+                );
+            case 'reroll':
+                return (
+                    <button
+                        onClick={() => { if (canReroll) { setShowPanel('none'); handleReroll(); } }}
+                        disabled={!canReroll}
+                        className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${canReroll ? 'text-slate-600' : 'text-slate-300 opacity-50'}`}
+                    >
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${canReroll ? 'bg-emerald-50 text-emerald-400 border-emerald-100' : 'bg-slate-50 text-slate-300 border-slate-100'}`}>
+                            <ArrowsClockwise className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">重新生成</span>
+                    </button>
+                );
+            case 'css':
+                return (
+                    <button onClick={() => { setModalType('chrome-css'); setShowPanel('none'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-sky-50 text-sky-500 border-sky-100">
+                            <PaintBrush className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">白框</span>
+                    </button>
+                );
+            case 'sound':
+                return (
+                    <button onClick={() => { setModalType('chrome-sound'); setShowPanel('none'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-amber-50 text-amber-500 border-amber-100">
+                            <BellSimpleRinging className="w-6 h-6" weight="bold" />
+                        </div>
+                        <span className="text-xs font-bold">提示音</span>
+                    </button>
+                );
+            case 'html':
+                // HTML 模式：tap 切换开关；右键/长按打开自定义提示词（交互对齐私聊）
+                return (
+                    <button
+                        onClick={() => {
+                            if (!activeGroup) return;
+                            const next = !activeGroup.htmlModeEnabled;
+                            updateGroup(activeGroup.id, { htmlModeEnabled: next });
+                            setActiveGroup({ ...activeGroup, htmlModeEnabled: next });
+                            addToast(next ? 'HTML 模式已开启' : 'HTML 模式已关闭', 'info');
+                            trackEvent('开启群聊 HTML 模式', { state: next ? 'on' : 'off' });
+                        }}
+                        onContextMenu={(e) => { e.preventDefault(); setTempHtmlPrompt(activeGroup?.htmlModeCustomPrompt || ''); setModalType('html-prompt'); setShowPanel('none'); }}
+                        className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600 relative"
+                    >
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${activeGroup?.htmlModeEnabled ? 'bg-fuchsia-100 text-fuchsia-600 border-fuchsia-200' : 'bg-fuchsia-50 text-fuchsia-500 border-fuchsia-100'}`}>
+                            <Code className="w-6 h-6" weight="bold" />
+                            {activeGroup?.htmlModeEnabled && <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-fuchsia-500 border-2 border-white" />}
+                        </div>
+                        <span className="text-xs font-bold">{activeGroup?.htmlModeEnabled ? 'HTML已开' : 'HTML模式'}</span>
+                    </button>
+                );
+            default:
+                return null;
+        }
+    };
+
     return (
         <div className={`sully-chat-root ${finalGroupRootClass}`} style={finalGroupRootStyle}>
             {/* 外观 App 的全局聊天细节与私聊共用同一份生成 CSS。 */}
@@ -2018,74 +2140,28 @@ ${memberTimeline || '(暂无互动记录)'}
                 acnh={acnh}
                 actionsContent={
                     <div className="p-6 grid grid-cols-4 gap-8">
-                        <button onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
-                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-pink-50 text-pink-400 border-pink-100">
-                                <ImageIcon className="w-6 h-6" weight="bold" />
+                        {/* 排序开关：常用功能可置顶/调序，顺序记在本地 */}
+                        <div className="col-span-4 flex items-center justify-between -mt-2 mb-1">
+                            <span className="text-[10px] text-slate-400">{sortActions ? '「顶」移到最前，↑↓ 微调顺序' : '常用功能可排序置顶'}</span>
+                            <button onClick={() => setSortActions(v => !v)} className={`text-[10px] font-bold px-3 py-1 rounded-full transition-all ${sortActions ? 'bg-violet-500 text-white' : 'bg-violet-50 text-violet-500'}`}>
+                                {sortActions ? '完成排序' : '排序'}
+                            </button>
+                        </div>
+                        {orderedActionIds.map(id => (
+                            <div key={id} className="relative">
+                                {renderActionTile(id)}
+                                {sortActions && (
+                                    <div className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 bg-white/80 rounded-2xl">
+                                        <button onClick={() => moveActionTile(id, 'top')} className="w-7 h-7 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center" title="置顶">顶</button>
+                                        <button onClick={() => moveActionTile(id, 'up')} className="w-7 h-7 rounded-full bg-white border border-violet-200 text-violet-500 text-[11px] font-bold flex items-center justify-center" title="上移">↑</button>
+                                        <button onClick={() => moveActionTile(id, 'down')} className="w-7 h-7 rounded-full bg-white border border-violet-200 text-violet-500 text-[11px] font-bold flex items-center justify-center" title="下移">↓</button>
+                                    </div>
+                                )}
                             </div>
-                            <span className="text-xs font-bold">相册</span>
-                        </button>
+                        ))}
                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
-
-                        <button onClick={() => { setModalType('transfer'); setShowPanel('none'); trackEvent('打开发红包面板'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
-                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-orange-50 text-orange-400 border-orange-100">
-                                <Money className="w-6 h-6" weight="bold" />
-                            </div>
-                            <span className="text-xs font-bold">红包</span>
-                        </button>
-
-                        <button onClick={openGroupSettings} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
-                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-violet-50 text-violet-500 border-violet-100">
-                                <GearSix className="w-6 h-6" weight="bold" />
-                            </div>
-                            <span className="text-xs font-bold">群设置</span>
-                        </button>
-
-                        <button
-                            onClick={() => { if (canReroll) { setShowPanel('none'); handleReroll(); } }}
-                            disabled={!canReroll}
-                            className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${canReroll ? 'text-slate-600' : 'text-slate-300 opacity-50'}`}
-                        >
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${canReroll ? 'bg-emerald-50 text-emerald-400 border-emerald-100' : 'bg-slate-50 text-slate-300 border-slate-100'}`}>
-                                <ArrowsClockwise className="w-6 h-6" weight="bold" />
-                            </div>
-                            <span className="text-xs font-bold">重新生成</span>
-                        </button>
-
-                        <button onClick={() => { setModalType('chrome-css'); setShowPanel('none'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
-                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-sky-50 text-sky-500 border-sky-100">
-                                <PaintBrush className="w-6 h-6" weight="bold" />
-                            </div>
-                            <span className="text-xs font-bold">白框</span>
-                        </button>
-
-                        <button onClick={() => { setModalType('chrome-sound'); setShowPanel('none'); }} className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600">
-                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border bg-amber-50 text-amber-500 border-amber-100">
-                                <BellSimpleRinging className="w-6 h-6" weight="bold" />
-                            </div>
-                            <span className="text-xs font-bold">提示音</span>
-                        </button>
-
-                        {/* HTML 模式：tap 切换开关；右键/长按打开自定义提示词（交互对齐私聊） */}
-                        <button
-                            onClick={() => {
-                                if (!activeGroup) return;
-                                const next = !activeGroup.htmlModeEnabled;
-                                updateGroup(activeGroup.id, { htmlModeEnabled: next });
-                                setActiveGroup({ ...activeGroup, htmlModeEnabled: next });
-                                addToast(next ? 'HTML 模式已开启' : 'HTML 模式已关闭', 'info');
-                                trackEvent('开启群聊 HTML 模式', { state: next ? 'on' : 'off' });
-                            }}
-                            onContextMenu={(e) => { e.preventDefault(); setTempHtmlPrompt(activeGroup?.htmlModeCustomPrompt || ''); setModalType('html-prompt'); setShowPanel('none'); }}
-                            className="flex flex-col items-center gap-2 active:scale-95 transition-transform text-slate-600 relative"
-                        >
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${activeGroup?.htmlModeEnabled ? 'bg-fuchsia-100 text-fuchsia-600 border-fuchsia-200' : 'bg-fuchsia-50 text-fuchsia-500 border-fuchsia-100'}`}>
-                                <Code className="w-6 h-6" weight="bold" />
-                                {activeGroup?.htmlModeEnabled && <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-fuchsia-500 border-2 border-white" />}
-                            </div>
-                            <span className="text-xs font-bold">{activeGroup?.htmlModeEnabled ? 'HTML已开' : 'HTML模式'}</span>
-                        </button>
+                        <input type="file" ref={cameraInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleImageUpload} />
                     </div>
-
                 }
             />
 
