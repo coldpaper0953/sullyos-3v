@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# runit service · SullyOS 心跳 worker（角色自主活动；不需要就别装）
+#
+# 安装同 sullyos-api，把名字换成 sullyos-worker。
+#
+# 注意两件事：
+#   1. 这个进程会周期性调用你配的模型接口，是花钱的。HEARTBEAT_POLL_MS 建议
+#      ≥120000（env.example 里已经这么设了）。
+#   2. Doze 会冻住整个 Termux 进程组。必须 termux-wake-lock，否则息屏一会儿
+#      心跳就停了——这不是代码问题，是 Android 电源管理。
+
+REPO=__REPO__
+
+cd "$REPO/backend" || exit 1
+
+exec 2>&1
+
+exec node --env-file=.env dist/worker.js

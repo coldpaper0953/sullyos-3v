@@ -1,0 +1,17 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# runit service · SullyOS 前端静态服务器（dist/）
+#
+# 安装同 sullyos-api，把名字换成 sullyos-web。
+#
+# HOST 刻意留在 127.0.0.1：
+#   · 127.0.0.1 是浏览器认可的安全上下文 → Service Worker、Web Push、
+#     crypto.subtle、getUserMedia 全部可用；换成局域网 IP 这四样立刻全丢。
+#   · local-static-server.cjs 没有任何鉴权。
+
+REPO=__REPO__
+
+cd "$REPO" || exit 1
+
+exec 2>&1
+
+HOST=127.0.0.1 PORT=4173 exec node scripts/local-static-server.cjs dist
