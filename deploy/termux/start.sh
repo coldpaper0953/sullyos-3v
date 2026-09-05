@@ -18,6 +18,22 @@ mkdir -p "$run_dir"
 say() { printf '\033[1;36m== %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
 
+# 找出还活着的 sullyos 进程（配合 launch 清孤儿用）。
+# PROC_DIR 是变量而不是写死 /proc，为了能在桌面系统上模拟测试。
+PROC_DIR="${PROC_DIR:-/proc}"
+
+list_sullyos_pids() { # $1=命令行匹配串；输出 pid，每行一个（不含自己）
+  local self="$$" pid cmd d
+  for d in "$PROC_DIR"/[0-9]*; do
+    [ -r "$d/cmdline" ] || continue
+    pid="${d##*/}"
+    [ "$pid" = "$self" ] && continue
+    # /proc 的 cmdline 是 NUL 分隔的，tr 成空格再匹配
+    cmd="$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null)" || continue
+    case "$cmd" in *"$1"*) printf '%s\n' "$pid" ;; esac
+  done
+}
+
 [ -f "$env_file" ] || die "缺 backend/.env —— 先跑 bash deploy/termux/setup.sh"
 
 alive() { # $1=name
@@ -30,6 +46,25 @@ launch() { # $1=name  $2..=命令
   if alive "$name"; then
     say "$name 已在跑 (pid $(cat "$run_dir/$name.pid"))"
     return
+  fi
+  # pid 文件可能随仓库重 clone 丢了，但旧进程还活着占着端口——
+  # 不清掉的话新进程 1 秒内 EADDRINUSE 死掉，这里还显示"起成功"。
+  local pat orphans
+  case "$name" in
+    api)    pat='dist/api.js' ;;
+    worker) pat='dist/worker.js' ;;
+    web)    pat='local-static-server.cjs' ;;
+    *)      pat='' ;;
+  esac
+  if [ -n "$pat" ]; then
+    orphans="$(list_sullyos_pids "$pat")" || true
+    if [ -n "$orphans" ]; then
+      say "清掉 $name 的孤儿进程: $(echo $orphans)"
+      kill $orphans 2>/dev/null || true
+      sleep 1
+      orphans="$(list_sullyos_pids "$pat")" || true
+      [ -n "$orphans" ] && { kill -9 $orphans 2>/dev/null || true; sleep 1; }
+    fi
   fi
   say "起 $name"
   # setsid + nohup：Termux 会话断开（切后台被回收）时进程不跟着走

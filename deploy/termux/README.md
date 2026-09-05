@@ -218,3 +218,11 @@ echo 'manage-package-manager-versions=false' >> ~/.npmrc
 ```
 
 （写文件而不是用 `pnpm config set`，因为后者本身也要先跑一遍版本自管逻辑，一样会炸在这里。）
+
+**重 clone / 重装仓库之前，先停干净旧进程。** `start.sh` 用 `setsid nohup` 起的守护进程不跟着仓库目录走——`rm -rf ~/sully` 删得掉文件，删不掉进程。旧 api 会揣着旧 APP_TOKEN 继续跑（新 `pair.sh` 请求被拒 401），旧 web 继续占着 4173（新 web 起不来 EADDRINUSE）。重装前跑：
+
+```bash
+bash ~/sully/deploy/termux/stop.sh all
+```
+
+万一仓库已经删了没法跑 stop，就在 Android 设置里「强行停止」Termux（setsid 进程也属于这个 UID，会一起被杀）。新版 `stop.sh` 和 `start.sh` 还会扫 `/proc` 按命令行特征清这类孤儿，双保险。
