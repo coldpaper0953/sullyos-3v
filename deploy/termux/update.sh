@@ -41,12 +41,15 @@ fi
 banner "1/4 拉取最新代码"
 old_head="$(git -C "$repo_root" rev-parse HEAD)"
 if ! git -C "$repo_root" pull --ff-only; then
-  die "git pull 失败——超时/解析失败九成是梯子分流漏了 github.com，把 v2rayNG 切「全局」再跑一遍。"
+  die "git pull 失败——超时/解析失败九成是梯子分流漏了 github.com，把 v2rayNG 切「全局」再跑一遍；也可能是本地改过已跟踪文件冲突，git stash 后重试。"
 fi
 new_head="$(git -C "$repo_root" rev-parse HEAD)"
 
 if [ "$old_head" = "$new_head" ] && [ "${1:-}" != "force" ]; then
-  say "已经是最新代码，无需更新（要强制重建重启：bash $repo_root/deploy/termux/update.sh force）"
+  say "已经是最新代码。顺手跑一遍 start.sh 自检（幂等，已在跑的不会动——上次更新半路失败的也能在这里被拉起来）"
+  # 不直接 exit：上次重建失败会留下「代码最新但服务是停的」状态，走一遍幂等的
+  # start.sh 正好自愈；服务都在跑时它只是打一遍健康检查，没有副作用。
+  bash "$repo_root/deploy/termux/start.sh"
   exit 0
 fi
 

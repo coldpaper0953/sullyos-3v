@@ -59,6 +59,10 @@ xiaohongshu-skills/
 !**/.dev.vars.example
 **/.wrangler/
 
+# Termux 部署的运行时文件：日志已被 *.log 兜住，pid 文件没有通配规则，
+# 整个 run/ 目录都是本机生成的，不该出现在任何一次 diff 里。
+deploy/termux/run/
+
 # git worktrees
 .worktrees/
 .claude/
