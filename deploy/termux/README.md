@@ -46,27 +46,48 @@ bash deploy/termux/doctor.sh
 
 ---
 
-## 二、一条命令装完
+## 二、一键部署
+
+全新设备，从零到能用，**复制这一整行**：
 
 ```bash
-pkg install git
-git clone <你的仓库地址> ~/sullyos
-cd ~/sullyos
-bash deploy/termux/setup.sh
+pkg install -y git && git clone https://github.com/coldpaper0953/sullyos-3v.git ~/sullyos && bash ~/sullyos/deploy/termux/deploy.sh
+```
+
+已经 clone 过、想拉新代码重跑：
+
+```bash
+cd ~/sullyos && git pull && bash deploy/termux/deploy.sh
 ```
 
 **别 clone 到 `/sdcard` 或 `/storage`。** 共享存储没有 exec 权限也没有真实文件权限，pnpm 和 postgres 都会失败——脚本第一步就会拦住你。
 
-`setup.sh` 做六件事，每步幂等（重复跑安全）：
+**Termux 装完先 `apt update && apt full-upgrade`。** 全新 bootstrap 的包版本经常跟当前仓库对不上，典型症状是 `libcurl.so` 缺符号，`curl` 和 `git clone` 一起挂。注意用 `apt` 而不是 `pkg`——`pkg` 自己要调 curl，会死在同一个地方。
+
+`deploy.sh` 就是把下面三个脚本串起来跑，全都幂等，中途失败修完再跑一遍即可，不用从头来：
+
+| | 干什么 |
+|---|---|
+| `setup.sh` | 装环境、建库、装依赖、构建（六步，见下） |
+| `start.sh` | 起 postgres / api / worker / 前端静态站 |
+| `pair.sh` | 打印配对链接 |
+
+`setup.sh` 那六步：
 
 1. 跑一遍 `doctor.sh` 把现状列出来，然后**只装缺的包**，并检查 Node ≥ 22
-2. 装 pnpm
+2. 装 pnpm——按 `backend/package.json` 的 `packageManager` 装**精确版本**，见「已知限制」里那条
 3. `initdb` + 起 postgres + `createdb sullyos`
 4. **探 pgcrypto**——见下面「pgcrypto 那一关」
-5. 后端 `pnpm install` → 生成 `backend/.env`（`APP_TOKEN` 和 `MODEL_VAULT_KEY` 自动随机填好）→ `pnpm build` → 跑迁移
+5. 后端 `pnpm install` → 生成 `backend/.env`（`APP_TOKEN` / `MODEL_VAULT_KEY` 随机填好，`DATABASE_URL` 的 socket 目录和用户名现探现填）→ `pnpm build` → 跑迁移
 6. 前端 `pnpm install` → `pnpm run build`
 
 跑完还要你手填一处：`backend/.env` 里的 `MODEL_BASE_URL` / `MODEL_API_KEY` / `MODEL_NAME`（心跳用哪个模型）。把你在 SullyOS 前端里测通的那套抄过来即可。不填也能用，只是角色不会自主活动。
+
+想在动手前先看看环境缺什么，`doctor.sh` 是只读的，随时可以单跑：
+
+```bash
+bash ~/sullyos/deploy/termux/doctor.sh
+```
 
 ---
 

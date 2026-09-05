@@ -170,9 +170,24 @@ else
 fi
 
 # 不管 .env 是新建的还是早就有的，DATABASE_URL 都按实测到的 socket 目录校正一遍。
-# 只动开头就是 DATABASE_URL= 的那一行，注释掉的 TCP 备用行（以 # 开头）不受影响。
+#
+# 这里刻意不用 sed。sed 替换串里的 & 是「整个匹配内容」，而我们的 URL 正好带
+# &user=xxx，实测会被展开成一坨垃圾：
+#   DATABASE_URL=...usr/tmpDATABASE_URL=...old/pathuser=u0_a247
+# 转义 & 也行，但纯 bash 逐行重写零转义面，而且能保住这一行在文件里的位置。
+# 只动开头就是 DATABASE_URL= 的行，注释掉的 TCP 备用行（以 # 开头）不受影响。
 if [ "$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2-)" != "$db_url" ]; then
-  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=$db_url|" .env
+  wrote_url=0
+  {
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        DATABASE_URL=*) printf '%s\n' "DATABASE_URL=$db_url"; wrote_url=1 ;;
+        *)              printf '%s\n' "$line" ;;
+      esac
+    done < .env
+    [ "$wrote_url" = 1 ] || printf '%s\n' "DATABASE_URL=$db_url"
+  } > .env.tmp
+  mv .env.tmp .env
   echo "已把 .env 里的 DATABASE_URL 校正为 $db_url"
 fi
 
