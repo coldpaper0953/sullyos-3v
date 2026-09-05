@@ -47,17 +47,29 @@ node_major="$(node -p 'process.versions.node.split(".")[0]')"
 printf 'node %s / npm %s\n' "$(node -v)" "$(npm -v 2>/dev/null || echo '-')"
 
 say "2/6 装 pnpm"
+# backend/package.json 的 packageManager 字段钉死了 pnpm 版本。pnpm 10 为了对上
+# 这个版本会去下自己那个版本的原生二进制，安卓要的是 @pnpm/exe.android-arm64，
+# 而 pnpm-lock.yaml 是在 Windows 上生成的、没有这一项，pnpm 拒绝安装校验不了的
+# 原生二进制，第 5 步 install 直接失败：
+#   Cannot verify the identity of the @pnpm/exe.android-arm64 native binary
+#
+# 第一层（治根）：把那个精确版本装成全局 pnpm。npm 上的 pnpm 包是纯 JS，安卓装
+# 得上；版本一对上，pnpm 就没有理由再去下原生二进制。
+want_pnpm="$(node -e 'const p=(require(process.argv[1]+"/backend/package.json").packageManager||"");process.stdout.write(p.split("@")[1]||"")' "$repo_root" 2>/dev/null || echo '')"
+have_pnpm="$(pnpm --version 2>/dev/null || echo '')"
+
+if [ -n "$want_pnpm" ] && [ "$have_pnpm" != "$want_pnpm" ]; then
+  echo "backend 钉的是 pnpm@$want_pnpm，当前 ${have_pnpm:-无}，装过去"
+  npm i -g "pnpm@$want_pnpm" || echo "装 pnpm@$want_pnpm 失败，退回现有 pnpm"
+fi
+
 if ! command -v pnpm >/dev/null; then
   npm i -g pnpm
 fi
 
-# pnpm 10 的 manage-package-manager-versions 默认开着：它会照着
-# backend/package.json 的 "packageManager": "pnpm@10.34.5" 去下自己那个版本的
-# 原生二进制。安卓上要的是 @pnpm/exe.android-arm64，而 pnpm-lock.yaml 是在
-# Windows 上生成的、没有这一项，pnpm 拒绝安装拿不到校验值的原生二进制：
-#   Cannot verify the identity of the @pnpm/exe.android-arm64 native binary
-# 手机上直接用已经装好的 pnpm 就行。写进 ~/.npmrc 而不是用 `pnpm config set`，
-# 因为后者本身也会先跑一遍版本自管逻辑，同样会炸在这里。
+# 第二层（兜底）：万一版本还是对不上，关掉版本自管，让 pnpm 用现成的自己。
+# 写 ~/.npmrc 而不是 `pnpm config set`，因为后者本身也要先跑一遍自管逻辑，
+# 一样会炸在这里。
 npmrc="$HOME/.npmrc"
 if ! grep -q '^manage-package-manager-versions=' "$npmrc" 2>/dev/null; then
   printf 'manage-package-manager-versions=false\n' >> "$npmrc"
