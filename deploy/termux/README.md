@@ -10,6 +10,28 @@
 
 装 Termux（**从 F-Droid 或 GitHub Releases 装，别用 Google Play 那个**，Play 版本早就停更、包源对不上）。再装 Termux:API 才有 `termux-wake-lock`。
 
+需要的环境（`setup.sh` 会自动装缺的，这里列出来是为了让你知道它在装什么）：
+
+| | 用途 |
+|---|---|
+| Node ≥ 22 | `backend/package.json` 的 `engines` 要求 |
+| pnpm | 包管理 |
+| git | clone；后端的备份通道也会调它 |
+| PostgreSQL ≥ 10 | Termux 包一般给 15/16/17，都够。schema 真实底线是 PG 10 |
+| openssl-tool | 生成 `APP_TOKEN` / `MODEL_VAULT_KEY` |
+| curl | 健康检查与生成配对码 |
+| termux-api（可选） | 有它才有 `termux-wake-lock`。不装 Doze 会冻住心跳进程 |
+
+**要你手填的配置只有 3 个**：`MODEL_BASE_URL` / `MODEL_API_KEY` / `MODEL_NAME`（心跳用哪个模型）。其余全自动——`APP_TOKEN` 和 `MODEL_VAULT_KEY` 随机生成，`DATABASE_URL` / `PORT` / `HOST` / `BACKUP_DIR` / `ALLOWED_ORIGINS` 模板里都填好了。
+
+想在动手前先看看环境缺什么，随时可以单独跑：
+
+```bash
+bash deploy/termux/doctor.sh
+```
+
+只读检测，什么都不装不改。列出命令与版本、postgres 状态、`sullyos` 库、pgcrypto、端口、`.env` 各字段、构建产物、磁盘内存，缺什么就给出对应的修复命令；全就绪退出码 0，有缺项退 1。
+
 资源账先看一眼：
 
 | | 大小 |
@@ -37,7 +59,7 @@ bash deploy/termux/setup.sh
 
 `setup.sh` 做六件事，每步幂等（重复跑安全）：
 
-1. `pkg install nodejs git postgresql openssl-tool`，并检查 Node ≥ 22
+1. 跑一遍 `doctor.sh` 把现状列出来，然后**只装缺的包**，并检查 Node ≥ 22
 2. 装 pnpm
 3. `initdb` + 起 postgres + `createdb sullyos`
 4. **探 pgcrypto**——见下面「pgcrypto 那一关」
@@ -61,7 +83,7 @@ bash deploy/termux/start.sh
 - 后端 `http://127.0.0.1:43210`
 - 日志 `deploy/termux/run/{api,worker,web}.log`
 
-在前端 **设置 →「SullyOS 自主后端」** 填 `http://127.0.0.1:43210`，用配对码接入（在已配对设备的面板里点「生成配对码」，15 分钟有效），然后点一次「完整同步角色、聊天与记忆宫殿」。
+在前端 **设置 →「SullyOS 自主后端」** 填 `http://127.0.0.1:43210`。接入方式见下一节（单设备不需要「另一台已配对设备」）。
 
 停：
 
@@ -72,32 +94,37 @@ bash deploy/termux/stop.sh all   # 连 postgres 一起停
 
 只重启某一个：`bash deploy/termux/start.sh api`（可选 `pg|api|worker|web`）。
 
+`start.sh` 用 `setsid nohup` 起进程：Termux 切后台、关掉终端会话都不影响，但**手机重启后进程就没了**，重跑一遍 `bash deploy/termux/start.sh` 即可。
+
+不管进程怎么起，**Doze 都是硬约束**——`termux-wake-lock` 每次都要有，否则息屏一会儿心跳就停。这不是代码问题，是 Android 电源管理。
+
 ---
 
-## 四、开机自启（可选）
+## 四、配对（单设备）
 
-`start.sh` 用 `setsid nohup`，Termux 会话断了进程还在，但手机重启就没了。要真正常驻用 runit：
+后端的配对流程原本假设你有两台设备：生成配对码的 `POST /v1/pairing-codes` 要带 `APP_TOKEN`（`backend/src/api.ts:36-37` 的免鉴权白名单里没有它），而设置面板里「生成配对码」那块又被「已有 token」门控。手机自己既是服务端又是唯一客户端时就死锁了。
+
+破法是让持有 token 的一方——手机上的 shell——去生成码：
 
 ```bash
-pkg install termux-services
-
-for s in sullyos-api sullyos-worker sullyos-web; do
-  mkdir -p $PREFIX/var/service/$s/log
-  cp ~/sullyos/deploy/termux/services/$s/run $PREFIX/var/service/$s/run
-  sed -i "s|__REPO__|$HOME/sullyos|" $PREFIX/var/service/$s/run
-  chmod +x $PREFIX/var/service/$s/run
-  ln -sf $PREFIX/share/termux-services/svlogger $PREFIX/var/service/$s/log/run
-done
-
-sv up sullyos-api sullyos-web
-sv up sullyos-worker        # 想要角色自主活动才起
+bash deploy/termux/pair.sh
 ```
 
-postgres 自己有现成的服务定义（`sv up postgresql`）。
+它从 `backend/.env` 读 `APP_TOKEN`，调后端生成一个 15 分钟一次性码，然后打印：
 
-状态和日志：`sv status sullyos-api`、`tail -f $PREFIX/var/log/sv/sullyos-api/current`。
+```
+  http://127.0.0.1:4173/?backendPair=A1B2-C3D4-E5F6
+```
 
-配合 Termux:Boot 可以做到开机拉起，但**Doze 仍然是硬约束**——`termux-wake-lock` 每次都要有，否则息屏一会儿心跳就停。这不是代码问题，是 Android 电源管理。
+在手机浏览器点开这条链接：配对码会**自动填进** 设置 →「SullyOS 自主后端」的输入框，面板也会自动展开，你只要点一下「配对」。参数会立刻从地址栏抹掉（码是一次性的，留着刷新只会反复撞失效）。
+
+想手输的话脚本也会把裸码打出来。
+
+配对完点一次「**完整同步角色、聊天与记忆宫殿**」——以这台设备为权威快照把数据推上后端。
+
+> `setup.sh` 结尾如果后端已经在跑，会自己调一次 `pair.sh` 把链接打出来。
+>
+> 存后端地址和 token 的 `sullyos_backend_chat_v1` **不在备份导出里**，也不在 `utils/lsMirror.ts` 的镜像名单里——清一次浏览器数据 token 就丢了。重跑 `pair.sh` 拿条新链接即可，随时可用。
 
 ---
 

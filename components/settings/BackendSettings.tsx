@@ -25,6 +25,7 @@ import {
     type BackendModelPool,
     type BackendPushConfig,
 } from '../../utils/backendClient';
+import { hasPendingPairCode, takePendingPairCode } from '../../utils/backendPairLink';
 import { acknowledgeBackendMemoryChangesThrough } from '../../utils/backendSyncQueue';
 import { DB } from '../../utils/db';
 import {
@@ -54,9 +55,12 @@ const newSnapshotId = () => typeof crypto.randomUUID === 'function'
 
 const BackendSettings: React.FC = () => {
     const { characters, userProfile, addToast } = useOS();
-    const [open, setOpen] = useState(false);
+    // pair.sh 打印的链接带一次性配对码，index.tsx 已把它收进 sessionStorage。
+    // 有待用码时面板自动展开——不展开的话码填好了用户也看不见（默认折叠）。
+    const [open, setOpen] = useState(hasPendingPairCode);
     const [config, setConfig] = useState<BackendChatConfig>(loadBackendChatConfig);
-    const [pairingCode, setPairingCode] = useState('');
+    // 自动填入：单设备场景下用户不用手抄那串码，点开链接后直接点「配对」即可。
+    const [pairingCode, setPairingCode] = useState(() => takePendingPairCode() ?? '');
     const [generatedPairingCode, setGeneratedPairingCode] = useState('');
     const [status, setStatus] = useState('');
     const [busy, setBusy] = useState<string | null>(null);
@@ -346,11 +350,7 @@ const BackendSettings: React.FC = () => {
                     <span className="mb-1.5 block text-[10px] font-bold text-slate-500">后端地址</span>
                     <input value={config.baseUrl} onChange={event => setConfig(current => ({ ...current, baseUrl: event.target.value }))} placeholder="http://127.0.0.1:43210" spellCheck={false} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 outline-none transition placeholder:text-slate-300 focus:border-sky-400 focus:ring-2 focus:ring-sky-100" />
                 </label>
-                <label className="block">
-                    <span className="mb-1.5 block text-[10px] font-bold text-slate-500">APP Token（高级设置，首次配对不用填）</span>
-                    <input type="password" value={config.token} onChange={event => setConfig(current => ({ ...current, token: event.target.value }))} placeholder="建议使用下方的一次性配对码" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 outline-none transition placeholder:text-slate-300 focus:border-sky-400 focus:ring-2 focus:ring-sky-100" />
-                </label>
-                {!config.token.trim() && <p className="rounded-xl border border-sky-100 bg-sky-50/80 px-3 py-2.5 text-[10px] leading-relaxed text-sky-900">APP Token 是服务器内部密钥，不需要你自己创建。首次连接只要在下面输入服务器生成的 15 分钟一次性配对码。</p>}
+                {!config.token.trim() && <p className="rounded-xl border border-sky-100 bg-sky-50/80 px-3 py-2.5 text-[10px] leading-relaxed text-sky-900">在手机上跑 <span className="font-mono">bash deploy/termux/pair.sh</span> 会打印一条链接，点开后下面的配对码会自动填好，你只要点「配对」。码是一次性的，15 分钟过期。</p>}
                 {!config.token.trim() && <div className="flex gap-2">
                     <input value={pairingCode} onChange={event => setPairingCode(event.target.value)} placeholder="一次性配对码" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-700 outline-none transition placeholder:text-slate-300 focus:border-sky-400 focus:ring-2 focus:ring-sky-100" />
                     <button disabled={busy !== null || !pairingCode.trim()} onClick={() => void pair()} className="shrink-0 rounded-xl bg-sky-600 px-4 text-xs font-bold text-white transition-transform active:scale-95 disabled:opacity-50">{busy === 'pair' ? '配对中' : '配对'}</button>

@@ -21,9 +21,25 @@ case "$repo_root" in
     ;;
 esac
 
-say "1/6 装系统包"
-pkg update -y
-pkg install -y nodejs git postgresql openssl-tool
+say "1/6 预检 + 装缺的系统包"
+# 先把环境状况整个列一遍（doctor.sh 只读，缺项它会告诉你怎么补）。
+# 这里不因为 doctor 报错就退出——下面几步正是来补这些缺项的。
+bash "$repo_root/deploy/termux/doctor.sh" || true
+
+need_pkgs=()
+command -v node    >/dev/null 2>&1 || need_pkgs+=(nodejs)
+command -v git     >/dev/null 2>&1 || need_pkgs+=(git)
+command -v psql    >/dev/null 2>&1 || need_pkgs+=(postgresql)
+command -v openssl >/dev/null 2>&1 || need_pkgs+=(openssl-tool)
+command -v curl    >/dev/null 2>&1 || need_pkgs+=(curl)
+
+if [ ${#need_pkgs[@]} -eq 0 ]; then
+  echo "系统包齐了，跳过 pkg install"
+else
+  echo "要装：${need_pkgs[*]}"
+  pkg update -y
+  pkg install -y "${need_pkgs[@]}"
+fi
 
 command -v node >/dev/null || die "node 没装上"
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
@@ -127,7 +143,13 @@ cat <<'EOF'
   1. 填 backend/.env 里的 MODEL_BASE_URL / MODEL_API_KEY / MODEL_NAME
   2. termux-wake-lock            # 不加 Doze 会挂掉心跳进程
   3. bash deploy/termux/start.sh
-  4. 浏览器开 http://127.0.0.1:4173
-     设置 →「SullyOS 自主后端」填 http://127.0.0.1:43210
+  4. bash deploy/termux/pair.sh  # 打印配对链接，点开即自动填好配对码
 
 EOF
+
+# 后端起着就顺手把配对链接打出来——这样从零到能用就是一条命令。
+# 起不着（还没 start）也不算失败，用户按上面第 3、4 步走即可。
+if curl -fsS --max-time 3 "http://127.0.0.1:$(grep -m1 '^PORT=' "$repo_root/backend/.env" | cut -d= -f2- | tr -d '[:space:]')/health" >/dev/null 2>&1; then
+  say "顺手生成配对链接"
+  bash "$repo_root/deploy/termux/pair.sh" || true
+fi

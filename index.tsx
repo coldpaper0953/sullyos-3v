@@ -9,6 +9,7 @@ import { VRScheduler } from './utils/vrWorld/scheduler';
 import { installIOSStandaloneWorkaround } from './utils/iosStandalone';
 import { installWakeListener } from './utils/proactivePushConfig';
 import { initAnalytics } from './utils/analytics';
+import { capturePairCodeFromUrl } from './utils/backendPairLink';
 import { Capacitor } from '@capacitor/core';
 
 // 默认构建不开启时 Rollup 会整段裁掉；普通浏览器/PWA 不加载原生插件、不申请权限。
@@ -36,6 +37,11 @@ installIOSStandaloneWorkaround();
 // 使用统计。构建时没配 VITE_UMAMI_* 就整个不生效，自部署实例默认如此。
 // 用户关掉开关、或浏览器开了 DNT，同样在这里就返回，连脚本都不会挂上去。
 initAnalytics();
+
+// 单设备配对：deploy/termux/pair.sh 打印的链接带 ?backendPair=<一次性码>。
+// 这里把码收下、暂存进 sessionStorage、并把参数从地址栏抹掉；设置页的「自主后端」
+// 面板挂载时会取出来自动填进输入框。URL 上没这个参数时不做任何事。
+capturePairCodeFromUrl();
 
 // 浏览器自动翻译 (Chrome/Edge 等) 会改动 React 托管的 DOM，导致 reconcile 时
 // insertBefore/removeChild 抛 NotFoundError 白屏。挂载前先打护栏。详见该 util 注释。
