@@ -50,6 +50,20 @@ say "2/6 装 pnpm"
 if ! command -v pnpm >/dev/null; then
   npm i -g pnpm
 fi
+
+# pnpm 10 的 manage-package-manager-versions 默认开着：它会照着
+# backend/package.json 的 "packageManager": "pnpm@10.34.5" 去下自己那个版本的
+# 原生二进制。安卓上要的是 @pnpm/exe.android-arm64，而 pnpm-lock.yaml 是在
+# Windows 上生成的、没有这一项，pnpm 拒绝安装拿不到校验值的原生二进制：
+#   Cannot verify the identity of the @pnpm/exe.android-arm64 native binary
+# 手机上直接用已经装好的 pnpm 就行。写进 ~/.npmrc 而不是用 `pnpm config set`，
+# 因为后者本身也会先跑一遍版本自管逻辑，同样会炸在这里。
+npmrc="$HOME/.npmrc"
+if ! grep -q '^manage-package-manager-versions=' "$npmrc" 2>/dev/null; then
+  printf 'manage-package-manager-versions=false\n' >> "$npmrc"
+  echo "已在 $npmrc 关掉 pnpm 版本自管"
+fi
+
 pnpm --version
 
 say "3/6 初始化 PostgreSQL"

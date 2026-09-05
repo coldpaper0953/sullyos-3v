@@ -182,3 +182,18 @@ bash deploy/termux/stop.sh && bash deploy/termux/start.sh
 **别把 `HOST` 改成 `0.0.0.0`。** 后端只有一个静态 bearer token 挡着且没有 TLS；`local-static-server.cjs` 完全没有鉴权。而且局域网 IP 走明文 HTTP 不是安全上下文，Service Worker、推送、`crypto.subtle`、摄像头会全部失效。真要别的设备访问，用 SSH 端口转发让浏览器仍然看到 `127.0.0.1`。
 
 **心跳是花钱的。** worker 每 `HEARTBEAT_POLL_MS` 检查一次到点的角色（默认已调到 120 秒）。轮询到点不等于每次都调 AI——角色自己的开关、活动时段、冷却、概率仍然生效。第一次只开最常聊的那一个角色观察。
+
+**pnpm 的版本自管在安卓上必须关掉。** `backend/package.json` 里有 `"packageManager": "pnpm@10.34.5"`，pnpm 10 默认会照这个字段去下自己那个版本的原生二进制。安卓要的是 `@pnpm/exe.android-arm64`，而 `pnpm-lock.yaml` 是在 Windows 上生成的、没有这一项，于是 pnpm 拒绝安装拿不到校验值的原生二进制：
+
+```
+[ERROR] Cannot verify the identity of the @pnpm/exe.android-arm64 native binary:
+        it is missing from pnpm-lock.yaml.
+```
+
+`setup.sh` 第 2 步已经会往 `~/.npmrc` 写 `manage-package-manager-versions=false` 把它关掉。**如果你绕过 setup.sh 手动跑 `pnpm install`**，先自己补上这一行：
+
+```bash
+echo 'manage-package-manager-versions=false' >> ~/.npmrc
+```
+
+（写文件而不是用 `pnpm config set`，因为后者本身也要先跑一遍版本自管逻辑，一样会炸在这里。）
