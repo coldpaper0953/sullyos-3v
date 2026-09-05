@@ -142,8 +142,19 @@ pnpm install --frozen-lockfile
 # 所以问 postgres 自己。unix_socket_directories 可能是逗号分隔的多个，取第一个。
 socket_dir="$(psql -d sullyos -tAc 'show unix_socket_directories' 2>/dev/null | cut -d, -f1 | tr -d '[:space:]')"
 [ -n "$socket_dir" ] || socket_dir="$PREFIX/tmp"
+
+# 用户名也必须显式写进 URL。node-postgres 的默认用户名只从 process.env.USER 取
+# （pg/lib/defaults.js:5），而 Termux 默认不设 USER，于是启动包里没有用户名：
+#   error: no PostgreSQL user name specified in startup packet  (28000)
+# 靠导出 USER 也不稳——start.sh 是 setsid nohup 起的守护进程，环境跟交互式 shell
+# 不一样。写进 URL 就跟环境彻底无关了。
+pg_user="$(psql -d sullyos -tAc 'select current_user' 2>/dev/null | tr -d '[:space:]')"
+[ -n "$pg_user" ] || pg_user="$(id -un 2>/dev/null || echo '')"
+
 db_url="postgresql:///sullyos?host=$socket_dir"
+[ -n "$pg_user" ] && db_url="$db_url&user=$pg_user"
 echo "postgres socket 目录：$socket_dir"
+echo "postgres 用户名：${pg_user:-探不到（会退回 \$USER，很可能失败）}"
 
 if [ -f .env ]; then
   echo ".env 已存在，密钥保留不动"

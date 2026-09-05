@@ -116,6 +116,15 @@ if [ -f "$env_file" ]; then
         real_dir="$(psql -d sullyos -tAc 'show unix_socket_directories' 2>/dev/null | cut -d, -f1 | tr -d '[:space:]')"
         bad "  DATABASE_URL socket" "$sock_dir 里没有 .s.PGSQL.5432" "postgres 实际用的是 ${real_dir:-$PREFIX/tmp}；重跑 bash deploy/termux/setup.sh 会自动校正这一行"
       fi
+      # 走 socket 时 URL 里必须带 user=：pg 的默认用户名只从 process.env.USER 取
+      # （pg/lib/defaults.js:5），Termux 不设这个变量，缺了就是 28000。
+      case "$db_url" in
+        *user=*) ok "  DATABASE_URL user" "已带" ;;
+        *)
+          real_user="$(psql -d sullyos -tAc 'select current_user' 2>/dev/null | tr -d '[:space:]')"
+          bad "  DATABASE_URL user" "缺 user= 参数" "没有它 migrate 会报 no PostgreSQL user name specified in startup packet；应该是 ${real_user:-$(id -un)}。重跑 bash deploy/termux/setup.sh 会自动补上"
+          ;;
+      esac
       ;;
     "") bad "  DATABASE_URL" "空" "重跑 bash deploy/termux/setup.sh" ;;
     *) ok "  DATABASE_URL" "走 TCP，跳过 socket 检查" ;;
