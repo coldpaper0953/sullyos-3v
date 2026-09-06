@@ -130,7 +130,7 @@ export interface BattleResult {
 }
 
 export interface BattleEvent {
-    kind: 'start' | 'attack' | 'crit' | 'dodge' | 'chain' | 'ko' | 'exhaust' | 'win';
+    kind: 'start' | 'attack' | 'crit' | 'dodge' | 'chain' | 'ko' | 'exhaust' | 'win' | 'cheat';
     atkSide: 'a' | 'b';
     round: number;
     text: string;
@@ -232,4 +232,97 @@ export function estimateOdds(a: PetCombatant, b: PetCombatant, sims = 200): { ra
     const oddsA = Math.max(1.1, Math.round((0.95 / Math.max(rateA, 0.05)) * 100) / 100);
     const oddsB = Math.max(1.1, Math.round((0.95 / Math.max(1 - rateA, 0.05)) * 100) / 100);
     return { rateA, oddsA, oddsB };
+}
+
+// ─── 出千续打：从任意中间状态接着模拟（回放中按出千后，改写后续战况）───
+
+export interface BattleMidState {
+    hpA: number;
+    hpB: number;
+    round: number;          // 下一回合的回合号
+    attackerIsA: boolean;   // 下一回合先手方
+}
+
+export interface CheatBuff {
+    side: 'a' | 'b';
+    stat: 'crit' | 'spd' | 'dodge';
+    untilRound: number;     // 该回合（含）之前生效
+}
+
+/** 从中间状态续打：属性翻倍 buff 只影响 crit/spd/dodge（攻击不变），到 untilRound 回合为止 */
+export function simulateContinue(
+    sideA: PetCombatant,
+    sideB: PetCombatant,
+    state: BattleMidState,
+    maxRounds: number,
+    buff?: CheatBuff,
+): BattleResult {
+    const rounds: string[] = [];
+    const events: BattleEvent[] = [];
+    let hpA = state.hpA, hpB = state.hpB;
+    let attackerIsA = state.attackerIsA;
+    const pushEvent = (kind: BattleEvent['kind'], atkSide: 'a' | 'b', round: number, text: string, dmg?: number) => {
+        events.push({ kind, atkSide, round, text, hpA, hpB, dmg });
+    };
+    const buffed = (isA: boolean, base: number) =>
+        buff && buff.untilRound >= round && ((buff.side === 'a') === isA) ? base * 2 : base;
+    const effCrit = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).crit);
+    const effSpd = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).spd);
+    const effDodge = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).dodge);
+
+    const attacker = () => (attackerIsA ? sideA : sideB);
+    const defender = () => (attackerIsA ? sideB : sideA);
+    const hpOf = (isA: boolean) => (isA ? hpA : hpB);
+    const deal = (isA: boolean, dmg: number) => { if (isA) hpB = Math.max(0, hpB - dmg); else hpA = Math.max(0, hpA - dmg); };
+
+    let round = state.round;
+    let ended = false;
+    while (round <= maxRounds && !ended) {
+        const atk = attacker();
+        const def = defender();
+        let chains = 0;
+        for (;;) {
+            if (def.hp <= 0 || hpOf(!attackerIsA) <= 0) { ended = true; break; }
+            if (Math.random() * 100 < effDodge(!attackerIsA)) {
+                const t = `第${round}回合：${atk.name} 发起攻击，被 ${def.name} 闪避了！`;
+                rounds.push(t);
+                pushEvent('dodge', attackerIsA ? 'a' : 'b', round, t);
+            } else {
+                const isCrit = Math.random() * 100 < effCrit(attackerIsA);
+                const dmg = Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1)));
+                deal(attackerIsA, dmg);
+                const t = `第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`;
+                rounds.push(t);
+                pushEvent(isCrit ? 'crit' : 'attack', attackerIsA ? 'a' : 'b', round, t, dmg);
+            }
+            if (hpOf(!attackerIsA) <= 0) {
+                const t = `${def.name} 倒下了！`;
+                rounds.push(t);
+                pushEvent('ko', attackerIsA ? 'a' : 'b', round, t);
+                ended = true;
+                break;
+            }
+            chains++;
+            if (chains >= 4 || Math.random() * 100 >= effSpd(attackerIsA)) break;
+            const t = `${atk.name} 身形一闪，抢在 ${def.name} 反应之前再次出手！`;
+            rounds.push(t);
+            pushEvent('chain', attackerIsA ? 'a' : 'b', round, t);
+        }
+        if (ended) break;
+        attackerIsA = !attackerIsA;
+        round++;
+    }
+
+    if (!ended) {
+        const pctA = hpA / sideA.hp, pctB = hpB / sideB.hp;
+        const t = `${maxRounds} 回合战罢，双方力竭——按剩余血量判定。`;
+        rounds.push(t);
+        pushEvent('exhaust', 'a', round, t);
+        attackerIsA = pctA >= pctB;
+    }
+    const winner = attackerIsA ? 'a' : 'b';
+    const winText = `胜负已分：${(winner === 'a' ? sideA : sideB).name} 获胜！`;
+    rounds.push(winText);
+    pushEvent('win', winner, round, winText);
+    return { rounds, events, winner, loser: winner === 'a' ? 'b' : 'a' };
 }

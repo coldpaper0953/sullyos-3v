@@ -5,7 +5,7 @@ import { Pet, PetGrade, PetStats, PetBattleRecord, PetMeta, CharacterProfile } f
 import { safeFetchJson, extractContent } from '../utils/safeApi';
 import {
     rollGrade, rollStats, rollAtk, rollHpByGrade, rollPool,
-    buildCombatant, simulateBattle, estimateOdds, PetCombatant, BattleEvent,
+    buildCombatant, simulateBattle, estimateOdds, simulateContinue, PetCombatant, BattleEvent,
 } from '../utils/petEngine';
 import { migrateDataUrlToRef } from '../utils/blobRef';
 import { processImage } from '../utils/file';
@@ -21,9 +21,9 @@ const STAT_POINTS_DEFAULT = 30;
 const BATTLE_MAX_ROUNDS = 30;
 const BATTLE_MISS_WEIGHT = 100;
 
-// 宠物点阵标准：最多 14 行 × 每行 24 字（盲文等宽，超出会歪/截断）
-const DOT_MAX_LINES = 14;
-const DOT_MAX_COLS = 24;
+// 宠物点阵标准：最多 42 行 × 每行 36 字（盲文等宽，超出会歪/截断）
+const DOT_MAX_LINES = 42;
+const DOT_MAX_COLS = 36;
 // 抽卡动画最短播放时长（ms）：user 抽卡播完即出结果卡，角色抽卡还要等 API 评价
 const DIG_MIN_MS = 2800;
 const DIG_INTERVAL_DEFAULT = 280;
@@ -41,6 +41,16 @@ const dotOversize = (raw: string) => {
 // 点阵在给定容器里不歪不截断的字号（px）
 const dotFontPx = (lines: number, cols: number, boxW: number, boxH: number) =>
     Math.max(2, Math.min(12, Math.min(boxW / Math.max(cols, 1), boxH / Math.max(lines, 1) / 1.15)));
+
+// 败者转盘默认条目（可在设置里增删改内容/权重）
+const WHEEL_ITEMS_DEFAULT: Array<{ id: string; text: string; weight: number }> = [
+    { id: 'w1', text: '学三声猫叫', weight: 30 },
+    { id: 'w2', text: '下一句消息必须带「喵」', weight: 25 },
+    { id: 'w3', text: '自爆一件糗事', weight: 20 },
+    { id: 'w4', text: '夸赢家三句不准重复', weight: 15 },
+    { id: 'w5', text: 'Avatar 换成赢家指定图', weight: 10 },
+];
+const NARRATION_BANNER_DEFAULT = '败者食尘，愿赌服输....';
 // 自定义盲文切帧：空行分隔多帧，无有效帧时回落默认三帧猫
 const parseAnimFrames = (raw?: string): string[] => {
     if (!raw || !raw.trim()) return DIG_FRAMES;
@@ -129,6 +139,12 @@ const PetPvpApp: React.FC = () => {
     const [eventIdx, setEventIdx] = useState(0);
     const logRef = useRef<HTMLDivElement>(null);
     const [battling, setBattling] = useState(false);
+    // 出千 / 战后感言横幅 / 败者惩罚
+    const [cheatUsed, setCheatUsed] = useState(false);
+    const [narrating, setNarrating] = useState(false);
+    const [spinning, setSpinning] = useState(false);
+    const [spinText, setSpinText] = useState('');
+    const [punishResult, setPunishResult] = useState<null | { text: string; memSaved: boolean }>(null);
 
     const charNameOf = (id: string) => id === 'user' ? (userProfile.name || '我') : (characters.find(c => c.id === id)?.name || '未知');
     const charAvatarOf = (id: string) => id === 'user' ? userProfile.avatar : characters.find(c => c.id === id)?.avatar;
@@ -412,11 +428,25 @@ const PetPvpApp: React.FC = () => {
         }
     };
 
+    // 押注/败方宠物结算保险：回放被打断没 commit 的旧战报，在下一场开打前按其记录的胜负补结算
+    const commitPendingRecords = async () => {
+        for (const rec of battles) {
+            if (rec.committed) continue;
+            const loserPetId = rec.winnerCharId === rec.aCharId ? rec.bPetId : rec.aPetId;
+            if (loserPetId) {
+                await DB.deletePet(loserPetId);
+                setPets(prev => prev.filter(p => p.id !== loserPetId));
+            }
+            rec.committed = true;
+            await DB.savePetBattle(rec);
+        }
+    };
+
     const startBattle = async () => {
         const sides = resolveSides();
         if (!sides) return;
         const [a, b] = sides;
-        // 押注扣钱（押了才结算，用你自己的金币）
+        // 押注只扣本金（派彩等回放结束按最终胜负结算——出千可能翻转结果）
         if (betSide && betAmount > 0) {
             const userGold = goldOf('user');
             if (userGold < betAmount) { addToast('你的金币不够押注', 'error'); return; }
@@ -424,23 +454,19 @@ const PetPvpApp: React.FC = () => {
         }
         setBattling(true);
         try {
-            // 0. 先把之前未压缩的战报压成一句话记忆（借鉴群聊：App 里看流水、脑子里留摘要）
+            // 0. 上一场未 commit 的先补结算，再把之前未压缩的战报压成一句话记忆
+            await commitPendingRecords();
             await compressPendingBattleMemories();
             // 1. 脚本模拟（战斗结果 + 赔率预演）——纯脚本，无 AI
             const result = simulateBattle(a, b, BATTLE_MAX_ROUNDS);
             const sim = estimateOdds(a, b, 200);
             const winnerCharId = result.winner === 'a' ? a.charId : b.charId;
-            const loserCharId = result.winner === 'a' ? b.charId : a.charId;
-            // 2. 押注结算
+            // 2. 押注信息（won/派彩推迟到回放结束）
             let bet: PetBattleRecord['bet'];
             if (betSide && betAmount > 0) {
-                const userGold = goldOf('user');
-                const won = betSide === result.winner;
-                const payout = Math.round(betAmount * (betSide === 'a' ? sim.oddsA : sim.oddsB));
-                await setGoldOf('user', won ? userGold - betAmount + payout : userGold - betAmount);
-                bet = { side: betSide, amount: betAmount, odds: betSide === 'a' ? sim.oddsA : sim.oddsB, won };
+                bet = { side: betSide, amount: betAmount, odds: betSide === 'a' ? sim.oddsA : sim.oddsB, won: false, settled: false };
             }
-            // 3. 落库：记录 + 败方宠物删除（宠物死亡只能重抽）
+            // 3. 落库：败方宠物删除与押注派彩都推迟到回放结束（committed）——出千可能翻转结果
             const record: PetBattleRecord = {
                 id: `pb-${Date.now()}`,
                 aCharId: a.charId, bCharId: b.charId,
@@ -449,17 +475,15 @@ const PetPvpApp: React.FC = () => {
                 rounds: result.rounds,
                 winnerCharId,
                 bet,
+                committed: false,
                 createdAt: Date.now(),
             };
             await DB.savePetBattle(record);
             setBattles(prev => [...prev, record]);
-            const loserPetId = result.winner === 'a' ? b.petId : a.petId;
-            if (loserPetId) {
-                await DB.deletePet(loserPetId);
-                setPets(prev => prev.filter(p => p.id !== loserPetId));
-            }
-            if (bet) addToast(bet.won ? `押中！赢得 ${Math.round(betAmount * bet.odds)} 金币` : `押错了，损失 ${betAmount} 金币`, bet.won ? 'success' : 'error');
-            // 4. 打开战斗页面逐拍回放，结束后 AI 生成「败方评价 + 胜方回复」
+            // 4. 打开战斗页面逐拍回放，结束后结算 + AI 生成「败方评价 + 胜方回复」
+            setCheatUsed(false);
+            setPunishResult(null);
+            setNarrating(false);
             setEventIdx(0);
             setArenaPhase('intro');
             setArena({ a, b, events: result.events, winner: result.winner, record });
@@ -468,13 +492,64 @@ const PetPvpApp: React.FC = () => {
         }
     };
 
-    // 战斗回放结束 → 调一次 API 生成「败方评价 + 胜方回复」（完整战报当场可见）
+    // 追加一句记忆到角色（战报压缩/惩罚共用；user 没有角色档案则跳过）
+    const appendCharMemory = (charId: string, line: string) => {
+        if (charId === 'user') return;
+        const char = characters.find(c => c.id === charId) as any;
+        if (!char) return;
+        const raw = char.memories;
+        const tail = Array.isArray(raw) ? raw.slice(-29) : String(raw || '').split('\n').slice(-29);
+        updateCharacter(charId, { memories: [...tail, line] });
+    };
+
+    // 回放结束 → ①按最终胜负结算（删败方宠物 + 押注派彩，出千可能翻转结果）②调 API 生成「败方评价 + 胜方回复」
     useEffect(() => {
-        if (!arena || arenaPhase !== 'battle' || arena.record.narration) return;
+        if (!arena || arenaPhase !== 'battle') return;
         if (eventIdx < arena.events.length - 1) return;
+        // ① 未 commit：先按最终结果结算（本 effect 会在 setArena 后再进来走到 ②）
+        if (!arena.record.committed) {
+            (async () => {
+                const winSide = arena.winner;
+                const loserSide: 'a' | 'b' = winSide === 'a' ? 'b' : 'a';
+                const loserPetId = loserSide === 'a' ? arena.a.petId : arena.b.petId;
+                if (loserPetId) {
+                    await DB.deletePet(loserPetId);
+                    setPets(prev => prev.filter(p => p.id !== loserPetId));
+                }
+                const record: PetBattleRecord = { ...arena.record, winnerCharId: winSide === 'a' ? arena.a.charId : arena.b.charId, committed: true };
+                if (record.bet && !record.bet.settled) {
+                    const won = record.bet.side === record.winnerCharId;
+                    const payout = won ? Math.round(record.bet.amount * record.bet.odds) : 0;
+                    if (payout > 0) await setGoldOf('user', goldOf('user') + payout);
+                    record.bet = { ...record.bet, won, settled: true };
+                    addToast(won ? `押中！赢得 ${payout} 金币` : `押错了，损失 ${record.bet.amount} 金币`, won ? 'success' : 'error');
+                }
+                await DB.savePetBattle(record);
+                setBattles(prev => prev.map(x => x.id === record.id ? record : x));
+                setArena(cur => cur && cur.record.id === record.id ? { ...cur, record } : cur);
+                // 赌钱惩罚：败者立刻赔给赢家（转盘模式由用户手点）
+                if ((meta.punishMode || 'wheel') === 'bet') {
+                    const loserCharId = loserSide === 'a' ? arena.a.charId : arena.b.charId;
+                    const winnerCharId = record.winnerCharId;
+                    const amount = Math.max(1, Math.min(meta.punishBetAmount ?? 100, goldOf(loserCharId)));
+                    if (amount > 0) {
+                        await setGoldOf(loserCharId, goldOf(loserCharId) - amount);
+                        await setGoldOf(winnerCharId, goldOf(winnerCharId) + amount);
+                        const line = `${new Date().toLocaleDateString('zh-CN')}，${charNameOf(loserCharId)} 在宠物对战中败给 ${charNameOf(winnerCharId)}，接受赌钱惩罚：赔了 ${amount} 金币。`;
+                        appendCharMemory(loserCharId, line);
+                        appendCharMemory(winnerCharId, line);
+                        setPunishResult({ text: `${charNameOf(loserCharId)} 赔给 ${charNameOf(winnerCharId)} ${amount} 金币`, memSaved: loserCharId !== 'user' || winnerCharId !== 'user' });
+                    }
+                }
+            })();
+            return;
+        }
+        // ② 战后感言（已 commit 才按最终胜负要播报）
+        if (arena.record.narration) return;
         (async () => {
             const { a, b, record } = arena;
             const cfg = pickModel();
+            setNarrating(true);
             try {
                 const personaA = await buildCharPrompt(a.charId);
                 const personaB = await buildCharPrompt(b.charId);
@@ -520,10 +595,69 @@ const PetPvpApp: React.FC = () => {
                     await DB.savePetBattle(record);
                     setArena(cur => (cur && cur.record.id === record.id ? { ...cur, record: { ...record } } : cur));
                 }
-            } catch { /* 播报失败 → 脚本战报兜底 */ }
+            } catch { /* 播报失败 → 脚本战报兜底 */ } finally {
+                setNarrating(false);
+            }
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [arena, arenaPhase, eventIdx]);
+
+    // ─── 出千：下一回合起随机 暴击/敏捷/闪避 翻倍两回合；可能失败/被抓（概率可在设置调），都会写进战况 ───
+    const handleCheat = () => {
+        if (!arena || cheatUsed || arena.record.committed) return;
+        const userSide: 'a' | 'b' | null = arena.a.charId === 'user' ? 'a' : arena.b.charId === 'user' ? 'b' : null;
+        if (!userSide) return;
+        const ev = arena.events[Math.min(eventIdx, arena.events.length - 1)];
+        const success = Math.random() * 100 < (meta.cheatSuccessRate ?? 65);
+        const caught = Math.random() * 100 < (meta.cheatCaughtRate ?? 35);
+        const stat = (['crit', 'spd', 'dodge'] as const)[Math.floor(Math.random() * 3)];
+        const statName = stat === 'crit' ? '暴击' : stat === 'spd' ? '敏捷' : '闪避';
+        const me = userSide === 'a' ? arena.a : arena.b;
+        const foe = userSide === 'a' ? arena.b : arena.a;
+        setCheatUsed(true);
+        let cheatText: string;
+        let buff: Parameters<typeof simulateContinue>[4] = undefined;
+        if (success && !caught) {
+            cheatText = `【出千】${charNameOf('user')} 偷偷给 ${me.name} 做了手脚——${statName} 翻倍，持续两回合，没有被察觉…`;
+            buff = { side: userSide, stat, untilRound: ev.round + 2 };
+        } else if (success && caught) {
+            cheatText = `【出千】${me.name} 的 ${statName} 刚要翻倍，就被 ${foe.name} 当场抓包——手脚被拍掉，无效！`;
+        } else {
+            cheatText = `【出千】${charNameOf('user')} 想给 ${me.name} 做手脚，结果手一抖搞砸了，什么都没发生。`;
+        }
+        const cheatEvent: BattleEvent = { kind: 'cheat', atkSide: userSide, round: ev.round, text: cheatText, hpA: ev.hpA, hpB: ev.hpB };
+        // 从下一回合接着打（先手 = 本事件攻击方的对方）；剩余回合不足则按血量判定
+        const cont = simulateContinue(arena.a, arena.b, { hpA: ev.hpA, hpB: ev.hpB, round: ev.round + 1, attackerIsA: ev.atkSide === 'b' }, BATTLE_MAX_ROUNDS, buff);
+        const shownNonChain = arena.events.slice(0, eventIdx + 1).filter(e => e.kind !== 'chain').length;
+        setArena({
+            ...arena,
+            events: [...arena.events.slice(0, eventIdx + 1), cheatEvent, ...cont.events],
+            winner: cont.winner,
+            record: { ...arena.record, rounds: [...arena.record.rounds.slice(0, shownNonChain), cheatText, ...cont.rounds] },
+        });
+    };
+
+    // ─── 败者惩罚转盘：按权重抽一条，结果写进败者记忆 ───
+    const spinWheel = async (loserCharId: string, winnerCharId: string) => {
+        if (spinning) return;
+        const items = (meta.wheelItems && meta.wheelItems.length ? meta.wheelItems : WHEEL_ITEMS_DEFAULT).filter(i => (i.weight || 0) > 0 && i.text.trim());
+        if (!items.length) { addToast('转盘是空的，先去设置里加惩罚条目', 'error'); return; }
+        setSpinning(true);
+        const total = items.reduce((s, i) => s + (i.weight || 0), 0);
+        let r = Math.random() * total;
+        let picked = items[items.length - 1];
+        for (const it of items) { r -= (it.weight || 0); if (r < 0) { picked = it; break; } }
+        for (let i = 0; i < 10; i++) {
+            setSpinText(items[Math.floor(Math.random() * items.length)].text);
+            await new Promise(rs => setTimeout(rs, 140));
+        }
+        setSpinText(picked.text);
+        const line = `${new Date().toLocaleDateString('zh-CN')}，${charNameOf(loserCharId)} 在宠物对战中败给 ${charNameOf(winnerCharId)}，转盘抽到惩罚：${picked.text}。`;
+        appendCharMemory(loserCharId, line);
+        setPunishResult({ text: picked.text, memSaved: loserCharId !== 'user' });
+        addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（已写入记忆）' : ''}`, 'success');
+        setSpinning(false);
+    };
 
     // ─── 宠物形象渲染（多行点阵按容器缩放字号，等宽不歪）───
     const PetVisual: React.FC<{ pet: { imageRef?: string; kaomoji?: string; name: string }, size?: string, boxPx?: number }> = ({ pet, size = 'w-14 h-14', boxPx = 56 }) => {
@@ -630,6 +764,19 @@ const PetPvpApp: React.FC = () => {
                         {!intro && ev.kind === 'dodge' && <div className="text-center text-sm font-bold text-sky-300 animate-fade-in">闪避！</div>}
                     </div>
                 </div>
+                {/* 出千（对战中限一次，user 参战才有） */}
+                {!intro && !done && (arena.a.charId === 'user' || arena.b.charId === 'user') && !cheatUsed && !arena.record.committed && (
+                    <button onClick={handleCheat} className="w-full py-2 rounded-xl border border-fuchsia-300 bg-fuchsia-50 text-fuchsia-600 text-xs font-bold active:scale-[0.98]">
+                        🎲 出千（限一次：下回合随机 暴击/敏捷/闪避 翻倍 2 回合，可能被抓）
+                    </button>
+                )}
+                {/* 战后感言请求中横幅（文字可在设置里改） */}
+                {!intro && narrating && (
+                    <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-center animate-pulse">
+                        <span className="text-xs font-bold text-amber-600">{meta.narrationBannerText || NARRATION_BANNER_DEFAULT}</span>
+                        <span className="text-[10px] text-amber-500 ml-2">正在请求战后感言…（切走也会继续，回来就能看到）</span>
+                    </div>
+                )}
                 {/* 战后 AI 播报（败方评价 + 胜方回复） */}
                 {done && arena.record.narration && (
                     <div className="rounded-2xl border border-[#7d7264]/30 bg-[#4a4438] p-3 space-y-2">
@@ -639,6 +786,30 @@ const PetPvpApp: React.FC = () => {
                         ) : null))}
                     </div>
                 )}
+                {/* 败者惩罚：转盘（手点）/ 赌钱（结算时自动） */}
+                {done && arena.record.committed && (meta.punishMode || 'wheel') !== 'off' && (() => {
+                    const loserSide: 'a' | 'b' = arena.winner === 'a' ? 'b' : 'a';
+                    const loser = loserSide === 'a' ? arena.a : arena.b;
+                    const winnerCharId = arena.winner === 'a' ? arena.a.charId : arena.b.charId;
+                    const mode = meta.punishMode || 'wheel';
+                    return (
+                        <div className="rounded-2xl border border-[#7d7264]/30 bg-[#4a4438] p-3 space-y-2">
+                            <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#c9bfae]">败者惩罚 · {loser.charName}</div>
+                            {mode === 'wheel' && !punishResult && (
+                                <button onClick={() => spinWheel(loser.charId, winnerCharId)} disabled={spinning}
+                                    className="w-full py-2 rounded-xl border border-amber-400/50 bg-[#5a5344] text-amber-200 text-xs font-bold active:scale-[0.98]">
+                                    {spinning ? `🎯 ${spinText}` : '🎯 转转盘定惩罚'}
+                                </button>
+                            )}
+                            {punishResult && (
+                                <div className="text-xs text-[#e8e0d0]">
+                                    {mode === 'wheel' ? '🎯 ' : '💰 '}{punishResult.text}
+                                    {punishResult.memSaved && <span className="text-[9px] text-[#a89a86] ml-1">（已写进 {loser.charName} 的记忆）</span>}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
                 {/* 控制 */}
                 {done ? (
                     <div className="space-y-2 animate-fade-in">
@@ -934,6 +1105,68 @@ const PetPvpApp: React.FC = () => {
                                         className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-mono outline-none mb-1" />
                                     <button onClick={async () => { const next = { ...meta, promptBattle: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认战报模板', 'success'); }} className="text-[9px] text-violet-500">↺ 恢复默认战报模板</button>
                                 </div>
+                                {/* 出千概率 */}
+                                <div className="pt-2 border-t border-slate-100">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">出千概率（%·对战限按一次）</label>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-[10px] text-slate-400 w-14">成功率</span>
+                                        <input type="number" min={0} max={100} value={meta.cheatSuccessRate ?? 65}
+                                            onChange={async e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)); const next = { ...meta, cheatSuccessRate: v }; setMeta(next); await DB.savePetMeta(next); }}
+                                            className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none tabular-nums" />
+                                        <span className="text-[10px] text-slate-400 w-20 ml-2">被抓住率</span>
+                                        <input type="number" min={0} max={100} value={meta.cheatCaughtRate ?? 35}
+                                            onChange={async e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)); const next = { ...meta, cheatCaughtRate: v }; setMeta(next); await DB.savePetMeta(next); }}
+                                            className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none tabular-nums" />
+                                    </div>
+                                    <p className="text-[9px] text-slate-400">成功且没被抓 → 下一回合起随机 暴击/敏捷/闪避 翻倍 2 回合；成功但被抓 → 翻倍取消；失败 → 无事发生。都会写进战况。</p>
+                                </div>
+                                {/* 战后感言横幅 */}
+                                <div className="pt-2 border-t border-slate-100">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">战后感言请求横幅文字</label>
+                                    <input value={meta.narrationBannerText ?? NARRATION_BANNER_DEFAULT}
+                                        onChange={async e => { const next = { ...meta, narrationBannerText: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }}
+                                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" />
+                                    <p className="text-[9px] text-slate-400 mt-1">感言生成需要十几秒，期间对战页面顶部会滚动显示这句话。</p>
+                                </div>
+                                {/* 败者惩罚 */}
+                                <div className="pt-2 border-t border-slate-100">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">败者惩罚</label>
+                                    <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-2">
+                                        {([['wheel', '转盘'], ['bet', '赌钱'], ['off', '关']] as Array<['wheel' | 'bet' | 'off', string]>).map(([id, label]) => (
+                                            <button key={id} onClick={async () => { const next = { ...meta, punishMode: id }; setMeta(next); await DB.savePetMeta(next); }}
+                                                className={`flex-1 py-1.5 rounded text-[10px] font-bold ${meta.punishMode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
+                                        ))}
+                                    </div>
+                                    {(meta.punishMode || 'wheel') === 'wheel' && (() => {
+                                        const items = meta.wheelItems ?? WHEEL_ITEMS_DEFAULT;
+                                        const saveItems = async (next: typeof items) => { const m = { ...meta, wheelItems: next }; setMeta(m); await DB.savePetMeta(m); };
+                                        return (
+                                            <div className="space-y-1.5">
+                                                {items.map((it, idx) => (
+                                                    <div key={it.id || idx} className="flex items-center gap-1.5">
+                                                        <input value={it.text} onChange={e => { const next = items.map((x, i) => i === idx ? { ...x, text: e.target.value } : x); saveItems(next); }}
+                                                            placeholder="惩罚内容" className="flex-1 min-w-0 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none" />
+                                                        <input type="number" min={1} value={it.weight} onChange={e => { const next = items.map((x, i) => i === idx ? { ...x, weight: Math.max(1, parseInt(e.target.value) || 1) } : x); saveItems(next); }}
+                                                            className="w-14 px-1.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none tabular-nums" />
+                                                        <button onClick={() => saveItems(items.filter((_, i) => i !== idx))} className="px-1.5 py-1 text-rose-400 text-xs font-bold">✕</button>
+                                                    </div>
+                                                ))}
+                                                <button onClick={() => saveItems([...items, { id: `w-${Date.now()}`, text: '', weight: 10 }])}
+                                                    className="w-full py-1.5 rounded-lg border border-dashed border-slate-300 text-slate-400 text-[10px] font-bold">＋ 加一条（内容 / 权重）</button>
+                                                <p className="text-[9px] text-slate-400">抽中的惩罚会自动写进败者的记忆。留空或权重 ≤0 的条目不参与。</p>
+                                            </div>
+                                        );
+                                    })()}
+                                    {(meta.punishMode || 'wheel') === 'bet' && (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-slate-400">败者赔给赢家</span>
+                                            <input type="number" min={1} value={meta.punishBetAmount ?? 100}
+                                                onChange={async e => { const v = Math.max(1, parseInt(e.target.value) || 100); const next = { ...meta, punishBetAmount: v }; setMeta(next); await DB.savePetMeta(next); }}
+                                                className="w-24 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none tabular-nums" />
+                                            <span className="text-[10px] text-slate-400">金币（结算时自动转账并记入双方记忆）</span>
+                                        </div>
+                                    )}
+                                </div>
                                 {/* 模型选择 */}
                                 <div className="pt-2 border-t border-slate-100">
                                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">AI 模型（抽卡评价 / 战报播报）</label>
@@ -1031,6 +1264,31 @@ const PetPvpApp: React.FC = () => {
                                             </div>
                                         </div>
                                     ))}
+                                    {battles.length > 0 && (() => {
+                                        const recent = battles.slice().sort((x, y) => y.createdAt - x.createdAt).slice(0, 10);
+                                        return (
+                                            <div className="space-y-2 pt-2">
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">最近战报（含感言/惩罚）</div>
+                                                {recent.map(b => (
+                                                    <details key={b.id} className="bg-white rounded-2xl border border-slate-200/70 overflow-hidden">
+                                                        <summary className="px-3 py-2.5 cursor-pointer flex items-center gap-2">
+                                                            <span className="text-xs font-bold text-slate-700 flex-1 truncate">
+                                                                {charNameOf(b.aCharId)}「{b.aName}」 vs {charNameOf(b.bCharId)}「{b.bName}」
+                                                            </span>
+                                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 shrink-0">
+                                                                🏆 {charNameOf(b.winnerCharId)}
+                                                            </span>
+                                                        </summary>
+                                                        <div className="px-3 pb-3 space-y-1.5">
+                                                            {b.narration
+                                                                ? b.narration.split('\n').map((line, i) => (line.trim() ? <div key={i} className="text-[11px] leading-relaxed text-slate-600">{line}</div> : null))
+                                                                : <div className="text-[10px] text-slate-400">（这场没有生成感言）</div>}
+                                                        </div>
+                                                    </details>
+                                                ))}
+                                            </div>
+                                        );
+                                    })()}
                                     {battles.length > 0 && (
                                         <button onClick={async () => { for (const b of battles) await DB.deletePetBattle(b.id); setBattles([]); addToast('已清空全部战报与战绩', 'success'); }}
                                             className="w-full py-2.5 rounded-xl border border-rose-200 text-rose-500 text-xs font-bold">🗑 清空全部战报 / 战绩</button>

@@ -4233,7 +4233,8 @@ export interface PetBattleRecord {
     narration?: string;                // AI 播报（战后一次调用生成）
     promptSent?: string;               // 实际发送的完整提示词（可视化用）
     memorySaved?: boolean;             // 战报已压缩成一句话记忆入库
-    bet?: { side: 'a' | 'b'; amount: number; odds: number; won: boolean };
+    bet?: { side: 'a' | 'b'; amount: number; odds: number; won: boolean; settled?: boolean };
+    committed?: boolean;               // 回放结束已按最终胜负结算（出千可能翻转结果，结算推迟到回放完）
     createdAt: number;
 }
 
@@ -4247,6 +4248,12 @@ export interface PetMeta {
     drawAnimBraille?: string;   // 盲文模式自定义盲文（多帧用空行分隔则轮换）
     drawAnimInterval?: number;  // 盲文帧轮换间隔毫秒（默认 280）
     defaultPetByChar?: Record<string, string>; // 每角色默认出战宠物（petId）；默认死了按抽取时间自动顺延
+    narrationBannerText?: string; // 战后感言请求中的横幅文字
+    punishMode?: 'wheel' | 'bet' | 'off'; // 败者惩罚模式：转盘 / 赌钱 / 关
+    wheelItems?: Array<{ id: string; text: string; weight: number }>; // 转盘条目（内容+权重）
+    punishBetAmount?: number;   // 赌钱模式：败者赔给赢家的固定金额
+    cheatSuccessRate?: number;  // 出千成功率 %（默认 65）
+    cheatCaughtRate?: number;   // 出千被发现的概率 %（默认 35）
     promptGacha?: string;       // 抽卡评价提示词模板（占位符可替换）
     promptBattle?: string;      // 战报播报提示词模板（占位符可替换）
     modelMode?: 'sub' | 'main'; // AI 调用模型：sub=副API（默认）/ main=主聊天模型
