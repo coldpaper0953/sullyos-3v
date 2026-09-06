@@ -37,6 +37,7 @@ import { INSTALLED_APPS, HIDDEN_APP_NAMES } from '../constants';
 import { isAnalyticsRequestUrl, trackEvent, trackDataScaleOnce, trackCurrentAppearanceOnce, trackCurrentCharSettingsOnce, trackCurrentFeaturesOnce } from '../utils/analytics';
 import { collectAppearance, collectCharSettings, collectDataScale, collectFeatureFlagsAsync } from '../utils/analyticsSnapshot';
 import { normalizeApiConfig, normalizeApiPreset } from '../utils/apiConfigNormalize';
+import { readModelsForOrigin } from '../utils/modelOriginCache';
 import { getCheckPhoneApi, setCheckPhoneApi } from '../utils/checkPhoneApi';
 import { markBackupDone } from '../utils/backupReminder';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
@@ -348,6 +349,7 @@ interface OSContextType {
 
   availableModels: string[];
   setAvailableModels: (models: string[]) => void;
+  saveModels: (models: string[]) => void;
   
   // API Presets
   apiPresets: ApiPreset[];
@@ -3034,7 +3036,22 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         addToast('主题没能保存到本地（存储空间可能已满），重启后可能会还原', 'error');
     }
   };
-  const updateApiConfig = (updates: Partial<APIConfig>) => { const newConfig = normalizeApiConfig({ ...apiConfig, ...updates }); setApiConfig(newConfig); localStorage.setItem('os_api_config', JSON.stringify(newConfig)); };
+  const updateApiConfig = (updates: Partial<APIConfig>) => {
+    const prevBaseUrl = apiConfig.baseUrl;
+    const prevModel = apiConfig.model;
+    const newConfig = normalizeApiConfig({ ...apiConfig, ...updates });
+    setApiConfig(newConfig);
+    localStorage.setItem('os_api_config', JSON.stringify(newConfig));
+    // 切换预设（换来源或换模型）时，模型列表跟着走：读新「接口+Key」的缓存，
+    // 没缓存就至少把新预设自己的 model 置顶显示，不再停留在旧预设的那份列表
+    if (newConfig.baseUrl !== prevBaseUrl || newConfig.model !== prevModel) {
+      const cached = readModelsForOrigin(newConfig.baseUrl, newConfig.apiKey);
+      const merged = newConfig.model
+        ? [newConfig.model, ...cached.filter(m => m !== newConfig.model)]
+        : cached;
+      if (merged.length > 0) setAvailableModels(merged);
+    }
+  };
   const updateRealtimeConfig = (updates: Partial<RealtimeConfig>) => { const newConfig = { ...realtimeConfig, ...updates }; setRealtimeConfig(newConfig); localStorage.setItem('os_realtime_config', JSON.stringify(newConfig)); };
 
   // Cloud Backup functions
@@ -5382,6 +5399,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     updateUserProfile,
     availableModels,
     setAvailableModels,
+    saveModels,
     apiPresets,
     addApiPreset,
     updateApiPreset,

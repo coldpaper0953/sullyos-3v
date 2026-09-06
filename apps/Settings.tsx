@@ -49,6 +49,7 @@ import {
     type AvatarModelBackupProgress,
 } from '../utils/avatarModelBackup';
 import { normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
+import { writeModelsForOrigin } from '../utils/modelOriginCache';
 import { loadApiFailoverConfig, saveApiFailoverConfig } from '../utils/apiFailover';
 import { configFromPreset, findActivePresetId, type PresetSwitchPatch } from '../utils/apiPresetSwitch';
 import type { APIConfig, TtsProvider } from '../types';
@@ -477,7 +478,7 @@ const McpServersCard: React.FC<{
 
 const Settings: React.FC = () => {
   const {
-      apiConfig, updateApiConfig, closeApp, availableModels, setAvailableModels,
+      apiConfig, updateApiConfig, closeApp, availableModels, setAvailableModels, saveModels,
       theme, updateTheme,
       exportSystem, importSystem, addToast, showError, resetSystem, updateCharacter,
       apiPresets, addApiPreset, updateApiPreset, removeApiPreset, moveApiPreset,
@@ -1286,6 +1287,9 @@ const Settings: React.FC = () => {
         const models = extractModelIds(data);
         if (models.length > 0) {
             setAvailableModels(models);
+            // 写来源缓存 + 落盘：否则重启后列表会回退到上次备份导入的那份
+            writeModelsForOrigin(baseUrl, apiKey, models);
+            saveModels(models);
             if (models.length > 0 && !models.includes(localModel)) setLocalModel(models[0]);
             setStatusMsg(`获取到 ${models.length} 个模型`);
             setShowModelModal(true); // Open selector immediately
