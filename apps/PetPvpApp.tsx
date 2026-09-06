@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Pet, PetGrade, PetStats, PetBattleRecord, PetMeta, CharacterProfile } from '../types';
-import { safeFetchJson } from '../utils/safeApi';
+import { safeFetchJson, extractContent } from '../utils/safeApi';
 import {
     rollGrade, rollStats, rollAtk, rollHpByGrade, rollPool,
     buildCombatant, simulateBattle, estimateOdds, PetCombatant, BattleEvent,
@@ -253,13 +253,14 @@ const PetPvpApp: React.FC = () => {
                                 { role: 'system', content: prompt },
                                 { role: 'user', content: '开抽！' },
                             ],
-                            temperature: 0.9, max_tokens: 200, stream: false,
+                            temperature: 0.9, max_tokens: 1024, stream: false,
                         }),
                     },
                     1, 60_000, { appName: '宠物对战', purpose: '抽卡评价' },
                 );
                 const d2 = await data;
-                pet.evalText = (d2?.choices?.[0]?.message?.content || '').trim().slice(0, 120);
+                // 思考模型（glm 等）会把额度花在 reasoning 上：extractContent 回落 reasoning_content/剥思维链
+                pet.evalText = extractContent(d2).slice(0, 120);
                 if (pet.evalText) { await DB.savePet(pet); setLastEval(pet.evalText); }
             } catch { /* 评价失败不影响宠物 */ } finally {
                 setDrawing(false);
@@ -450,13 +451,13 @@ const PetPvpApp: React.FC = () => {
                                 { role: 'system', content: prompt },
                                 { role: 'user', content: '请开始播报。' },
                             ],
-                            temperature: 0.9, max_tokens: 800, stream: false,
+                            temperature: 0.9, max_tokens: 2048, stream: false,
                         }),
                     },
                     1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
                 );
                 const d2 = await data;
-                const text = (d2?.choices?.[0]?.message?.content || '').trim();
+                const text = extractContent(d2);
                 if (text) {
                     record.narration = text;
                     record.promptSent = prompt;
