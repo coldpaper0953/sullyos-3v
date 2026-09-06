@@ -4216,12 +4216,13 @@ export interface Pet {
     imageRef?: string;          // 用户上传图片（blobref/dataURL），优先于颜文字
     kaomoji?: string;           // 无图时的文字形象（颜文字/点阵图）
     desc?: string;              // 脚本生成的形象描述
+    evalText?: string;          // 角色对这次抽卡结果的口吻评价（角色抽卡时 AI 生成）
     source?: 'pool' | 'random'; // pet 专属：来自池子命中还是随机生成
     poolTemplateId?: string;    // 命中的池子模板 id
     createdAt: number;
 }
 
-/** 一场对战：脚本先算完整个回合流水，AI 只负责一次播报 */
+/** 一场对战：脚本先算完整个回合流水，结束后 AI 按模板生成「败方评价 + 胜方回复」 */
 export interface PetBattleRecord {
     id: string;
     aCharId: string; bCharId: string;
@@ -4229,7 +4230,9 @@ export interface PetBattleRecord {
     aPetId?: string; bPetId?: string;  // 战败方宠物会被删除，所以留可选
     rounds: string[];                  // 脚本战报流水
     winnerCharId: string;
-    narration?: string;                // AI 播报（一次调用生成）
+    narration?: string;                // AI 播报（战后一次调用生成）
+    promptSent?: string;               // 实际发送的完整提示词（可视化用）
+    memorySaved?: boolean;             // 战报已压缩成一句话记忆入库
     bet?: { side: 'a' | 'b'; amount: number; odds: number; won: boolean };
     createdAt: number;
 }
@@ -4240,6 +4243,11 @@ export interface PetMeta {
     goldByChar: Record<string, number>; // 每个角色独立金币（'user' = 玩家本人）
     totalStatPoints: number;    // 敏捷/闪避/暴击三项总和（默认 30，可调）
     drawAnimUrl?: string;       // 抽卡动画自定义图片 URL（支持 GIF），空 = 默认盲文点阵猫
+    drawAnimMode?: 'braille' | 'image'; // 抽卡动画模式：braille=盲文点阵（默认）/ image=自定义图片
+    drawAnimBraille?: string;   // 盲文模式自定义盲文（多帧用空行分隔则轮换）
+    promptGacha?: string;       // 抽卡评价提示词模板（占位符可替换）
+    promptBattle?: string;      // 战报播报提示词模板（占位符可替换）
+    modelMode?: 'sub' | 'main'; // AI 调用模型：sub=副API（默认）/ main=主聊天模型
 }
 
 /**

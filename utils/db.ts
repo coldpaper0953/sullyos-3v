@@ -2404,6 +2404,12 @@ export const DB = {
       });
   },
 
+  deletePetBattle: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_PET_BATTLES, 'readwrite');
+      transaction.objectStore(STORE_PET_BATTLES).delete(id);
+  },
+
   getPetMeta: async (): Promise<PetMeta | null> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_PET_META)) return null;
