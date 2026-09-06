@@ -62,11 +62,23 @@ bash "$repo_root/deploy/termux/setup.sh"
 banner "4/4 启动新版"
 bash "$repo_root/deploy/termux/start.sh"
 
+# 顺手装超短命令（幂等）：up = 热更新（参数忽略，up 002 也行）；002 = 重启服务
+make_short() { # $1=命令名 $2=脚本内容
+  if printf '#!/data/data/com.termux/files/usr/bin/bash\n%s\n' "$2" > "$PREFIX/bin/$1" 2>/dev/null && chmod +x "$PREFIX/bin/$1" 2>/dev/null; then
+    say "已装短命令: $1"
+  else
+    warn "短命令 $1 没装上（$PREFIX/bin 不可写），不影响更新"
+  fi
+}
+make_short up "bash '$repo_root/deploy/termux/update.sh'"
+make_short 002 "bash '$repo_root/deploy/termux/stop.sh'; bash '$repo_root/deploy/termux/start.sh'"
+
 cat <<EOF
 
 $(printf '\033[1;32m热更新完成。\033[0m')
 
   前端  http://127.0.0.1:4173 （浏览器里刷新一下页面就是新代码）
   日志  $repo_root/deploy/termux/run/{api,worker,web}.log
+  以后更新直接输 up ，重启输 002
 
 EOF
