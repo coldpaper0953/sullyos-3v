@@ -1,0 +1,112 @@
+SullyOS 3v 更新说明
+====================
+基线：原作者的上游 SullyOS 快照（3v 初始状态）
+本文件由 ZCode 生成于 2026-09-05，对应仓库 github.com/coldpaper0953/sullyos-3v
+最新提交：87ca523
+
+一共 9 个提交，分三大块。原版的功能逻辑一行没动，原版自带的
+安全问题（如 utils/videoParser.ts 的共享 key）按约定原样保留。
+
+
+一、从 fork 复刻的功能（提交 bdb5c3a）
+----------------------------------------
+
+1. 通讯录 App
+   联系人管理，完整移植。
+
+2. Spark 帖子增强
+   回复/评论、延迟评论、自动刷新；
+   样式对齐 fork v1.0.7 毛玻璃风格（四个元素不带 #ff2442）。
+
+3. 聊天：真取景框相机
+   getUserMedia 实时取景，不是 <input capture>。
+
+4. 聊天：API 快速切换
+   聊天界面直接切换 API 配置。
+
+5. 聊天：API 失败自动切换（apiFailover）
+   请求失败按顺序回落到备用配置。
+
+6. 聊天：停止生成
+   per-turn AbortController，随时打断正在生成的回复。
+
+7. 角色批量配置（BatchConfigModal）
+   多个角色一起改设置。
+
+8. 协作窗口增强
+   支持图片附件 + 输出格式选择。
+
+9. 设置页 6 个新面板
+   3 个接自主后端 + 3 个纯前端（StorageGuard / InstallApp / CloudSync）。
+
+
+二、自主后端 + 心跳（提交 bdb5c3a、9dac1b9）
+----------------------------------------
+
+* backend/ 目录：整套 Fastify + PostgreSQL 服务
+  - 角色 / 聊天 / 记忆宫殿云端存储
+  - 模型池与路由
+  - Web Push 推送
+  - 13 个 SQL 迁移，带校验和与锁的迁移执行器
+
+* 心跳层：角色自主活动
+  - backendEventRuntime / 日记卡片
+  - OSContext 轮询 + 30 秒冲刷 + 删角色清理
+  - Service Worker 推送分支
+
+* 单设备配对
+  - utils/backendPairLink.ts：URL 带 ?backendPair=码 自动填入设置面板
+  - 手机上跑 deploy/termux/pair.sh 打印配对链接，点开即填好
+  - 去掉了多余的 APP Token 手输框和开机自启
+
+* 数据层
+  - IndexedDB 版本 71 → 74，新增后端同步队列两个 store
+  - 消息删除进同步队列，后端和本地保持一致
+
+
+三、Termux 手机部署脚本（提交 fc19179 … 87ca523，共 7 个）
+----------------------------------------
+
+deploy/termux/ 下 9 个文件：
+
+  deploy.sh      一键部署（新手机一行命令到浏览器自动打开）
+  setup.sh       装包 / pnpm@10.34.5 / initdb / 探 socket 与用户名 / 迁移 / 构建
+  doctor.sh      只读预检（包、库、socket、密钥、端口、磁盘内存）
+  start.sh       起 postgres / api / worker / 前端，起完自动开浏览器
+  stop.sh        停进程 + 按 /proc 清孤儿进程
+  pair.sh        生成一次性配对码并打印链接（15 分钟有效）
+  backup-db.sh   pg_dump 备份 + sha256
+  env.example    环境变量模板
+  README.md      完整 runbook
+
+踩坑修出来的适配：
+
+  * pnpm 精确装 packageManager 钉的 10.34.5
+    （修 @pnpm/exe.android-arm64 不在 lockfile 导致的安装失败）
+  * postgres socket 目录自动探测（Termux 用 $PREFIX/tmp，不是 Debian 的
+    /var/run/postgresql）
+  * DATABASE_URL 显式带 user=（node-postgres 只读 process.env.USER，
+    Termux 默认不设）
+  * .env 重写用纯 bash 逐行改（sed 的 & 展开会写坏 URL）
+  * 孤儿进程清理（重装仓库后旧进程揣旧 token 报 401、占端口报
+    EADDRINUSE）
+  * 新装 Termux 先 apt update && apt full-upgrade（libcurl 符号缺失）
+
+
+四、刻意不动的
+----------------------------------------
+
+* 上游自带的安全问题原样保留（videoParser.ts 共享 key、
+  proactivePushConfig.ts 的 token、XSS sink、明文 WebDAV 代理等）
+* fork 的 OSContext 重构、GitHub 自动备份、回车换行、PWA 缓存块等
+  一律未搬
+* 原则：只加不改，不做底层重构
+
+
+质量门禁（提交时状态）
+----------------------------------------
+
+  tsc            48 个既有错误基线，零新增
+  vitest         361 个文件 / 4516 个测试全过
+  前端构建        vite build 成功
+  后端构建        tsc 零错误

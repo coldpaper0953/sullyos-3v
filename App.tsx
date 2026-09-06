@@ -9,6 +9,7 @@ import Amsg2DebugPanel from './components/Amsg2DebugPanel';
 import VRBroadcast from './components/VRBroadcast';
 import WorldBroadcast from './components/WorldBroadcast';
 import ChatBroadcast from './components/ChatBroadcast';
+import MiniChatWindow from './components/MiniChatWindow';
 import { isIOSStandaloneWebApp } from './utils/iosStandalone';
 import { installDevDebugLifecycleCapture } from './utils/devDebug';
 
@@ -39,6 +40,8 @@ const App: React.FC = () => {
           <OSProvider>
             <MusicProvider>
               <PhoneShell />
+              {/* 左上角未读红点 + 小聊天窗：必须在 MusicProvider 内（小窗里渲染的 Chat 依赖 useMusic） */}
+              <MiniChatWindow />
             </MusicProvider>
             {/* 挂在 Provider 里面才能直接读 characters（省掉轮询 IndexedDB），
                 面板自身用 portal 渲染到 body，绕开上面那层 transform 对 fixed 定位的影响。 */}

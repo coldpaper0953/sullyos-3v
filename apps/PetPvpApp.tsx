@@ -3,6 +3,7 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Pet, PetGrade, PetStats, PetBattleRecord, PetMeta, CharacterProfile } from '../types';
 import { safeFetchJson, extractContent } from '../utils/safeApi';
+import { CHAT_GEN_EVENTS, announceChatGen } from '../utils/chatGenEvents';
 import {
     rollGrade, rollStats, rollAtk, rollHpByGrade, rollPool,
     buildCombatant, simulateBattle, estimateOdds, simulateContinue, PetCombatant, BattleEvent,
@@ -57,6 +58,12 @@ const PROMPT_PUNISH_DEFAULT = `{人设}
 你刚刚在宠物对战中败给 {赢家}，转盘抽到了惩罚：「{惩罚}」。
 
 请用你自己的口吻，对接受这个惩罚做出回应（一两句话，40 字以内），直接输出回应本身，不要输出其他内容。`;
+
+const PROMPT_RVR_TALK_DEFAULT = `{人设}
+
+刚刚你和 {对方主人} 打了一场宠物对战：{结果}（对方出场：{对方主人} 的「{对方宠物}」）。
+
+请用你自己的口吻发一条消息（一两句，40 字以内）：可以吐槽 {对方主人}、炫耀、或者帮用户带个话，直接输出消息本身，不要输出其他内容。`;
 // 自定义盲文切帧：空行分隔多帧，无有效帧时回落默认三帧猫
 const parseAnimFrames = (raw?: string): string[] => {
     if (!raw || !raw.trim()) return DIG_FRAMES;
@@ -108,7 +115,7 @@ const PROMPT_BATTLE_DEFAULT = `{A人设}
 type Tab = 'gacha' | 'pets' | 'battle' | 'stats';
 
 const PetPvpApp: React.FC = () => {
-    const { closeApp, characters, apiConfig, memoryPalaceConfig, addToast, userProfile, updateCharacter } = useOS();
+    const { closeApp, characters, apiConfig, memoryPalaceConfig, addToast, userProfile, updateCharacter, groups } = useOS();
 
     const [tab, setTab] = useState<Tab>('gacha');
     const [pets, setPets] = useState<Pet[]>([]);
@@ -149,9 +156,9 @@ const PetPvpApp: React.FC = () => {
     const [cheatUsed, setCheatUsed] = useState(false);
     const [narrating, setNarrating] = useState(false);
     const [wheelModal, setWheelModal] = useState<null | { loserCharId: string; winnerCharId: string }>(null);
-    const [spinIdx, setSpinIdx] = useState(0);
+    const [wheelRotation, setWheelRotation] = useState(0);
     const [wheelSpun, setWheelSpun] = useState<null | { text: string; memSaved: boolean }>(null);
-    const [wheelApi, setWheelApi] = useState<null | { loading: boolean; text: string }>(null);
+    const [tplModalOpen, setTplModalOpen] = useState(false);
     const [punishResult, setPunishResult] = useState<null | { text: string; memSaved: boolean }>(null);
     // 自定义盲文多帧编辑：每帧一个框（本地编辑态，存库时按空行合并）
     const [frameBoxes, setFrameBoxes] = useState<string[] | null>(null);
@@ -399,9 +406,17 @@ const PetPvpApp: React.FC = () => {
     };
     const resolveSides = (): [PetCombatant, PetCombatant] | null => {
         const owners = alivePets.map(p => p.ownerId);
-        let aId = sideAChar || 'user';
-        let bId = mode === 'rvr' ? pickRandomCharWithPet(aId) : sideBChar;
-        if (mode === 'avs' && !bId) bId = pickRandomCharWithPet(aId);
+        let aId: string;
+        let bId: string;
+        if (mode === 'rvr') {
+            // 随机 vs 随机：两个都由脚本随机抽（有宠物的角色里），没有指定方
+            aId = pickRandomCharWithPet();
+            bId = pickRandomCharWithPet(aId);
+        } else {
+            aId = sideAChar || 'user';
+            bId = sideBChar;
+            if (mode === 'avs' && !bId) bId = pickRandomCharWithPet(aId);
+        }
         if (aId === bId) { addToast('两边不能是同一个角色', 'error'); return null; }
         // 自动兜底：任一方没有活宠物 → 从有宠物的人里补位（rand 模式/用户没宠物时都能开战）
         if (!combatantOf(aId)) {
@@ -551,6 +566,53 @@ const PetPvpApp: React.FC = () => {
                         setPunishResult({ text: `${charNameOf(loserCharId)} 赔给 ${charNameOf(winnerCharId)} ${amount} 金币`, memSaved: loserCharId !== 'user' || winnerCharId !== 'user' });
                     }
                 }
+                // 随机 vs 随机（双方都是 NPC）：各自调一次 API 吐槽/炫耀/带话，发到两人都在的群；没有就私发给 user
+                if (arena.a.charId !== 'user' && arena.b.charId !== 'user') {
+                    const commonGroup = groups.find(g => g.members.includes(arena.a.charId) && g.members.includes(arena.b.charId));
+                    for (const side of [arena.a, arena.b] as const) {
+                        const foe = side === arena.a ? arena.b : arena.a;
+                        const won = record.winnerCharId === side.charId;
+                        announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: side.charId, charName: side.charName });
+                        (async (sideArg, foeArg, sideWon) => {
+                            let text = '';
+                            try {
+                                const persona = await buildCharPrompt(sideArg.charId);
+                                const prompt = PROMPT_RVR_TALK_DEFAULT
+                                    .split('{人设}').join(persona)
+                                    .split('{我方宠物}').join(sideArg.name)
+                                    .split('{对方主人}').join(foeArg.charName)
+                                    .split('{对方宠物}').join(foeArg.name)
+                                    .split('{结果}').join(sideWon ? `你的「${sideArg.name}」赢了` : `你的「${sideArg.name}」输给了对方的「${foeArg.name}」`);
+                                const cfg = pickModel();
+                                const data = await safeFetchJson(
+                                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                                    {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                                        body: JSON.stringify({
+                                            model: cfg.model,
+                                            messages: [
+                                                { role: 'system', content: prompt },
+                                                { role: 'user', content: '说说吧。' },
+                                            ],
+                                            temperature: 0.9, max_tokens: 1024, stream: false,
+                                        }),
+                                    },
+                                    1, 60_000, { appName: '宠物对战', purpose: '随机对战发言' },
+                                );
+                                const d2 = await data;
+                                text = extractContent(d2).slice(0, 200);
+                            } catch { /* 失败就安静跳过 */ }
+                            if (text) {
+                                await DB.saveMessage(commonGroup
+                                    ? { charId: sideArg.charId, groupId: commonGroup.id, role: 'assistant', type: 'text', content: text }
+                                    : { charId: sideArg.charId, role: 'assistant', type: 'text', content: text });
+                                announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: sideArg.charId, charName: sideArg.charName });
+                            }
+                            announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: sideArg.charId, charName: sideArg.charName });
+                        })(side, foe, won);
+                    }
+                }
             })();
             return;
         }
@@ -647,65 +709,88 @@ const PetPvpApp: React.FC = () => {
         });
     };
 
-    // ─── 败者惩罚转盘（弹窗）：高亮逐格减速轮转 → 按权重落定 → 写记忆 → 调 API 让败者用口吻回应 ───
+    // ─── 败者惩罚转盘（圆形弹窗）：旋转落定 → 写记忆 → 调 API 生成回应 → 发进败者私聊（横幅=私聊同款，弹窗随时可关）───
     const wheelItemsActive = () =>
         (meta.wheelItems && meta.wheelItems.length ? meta.wheelItems : WHEEL_ITEMS_DEFAULT).filter(i => (i.weight || 0) > 0 && i.text.trim());
+    const togglePunishMode = async () => {
+        const next = { ...meta, punishMode: (meta.punishMode || 'wheel') === 'wheel' ? 'bet' as const : 'wheel' as const };
+        setMeta(next);
+        await DB.savePetMeta(next);
+        addToast(next.punishMode === 'wheel' ? '惩罚切换为：转盘模式' : '惩罚切换为：赌钱模式', 'success');
+    };
     const runWheelSpin = async () => {
         if (!wheelModal) return;
         const { loserCharId, winnerCharId } = wheelModal;
         const items = wheelItemsActive();
         if (!items.length) { addToast('转盘是空的，先去设置里加惩罚条目', 'error'); return; }
         setWheelSpun(null);
-        setWheelApi(null);
+        // 按权重落定，圆盘转 4 圈以上停在扇区中心
         const total = items.reduce((s, i) => s + (i.weight || 0), 0);
         let r = Math.random() * total;
         let pickedIdx = items.length - 1;
-        for (let i = 0; i < items.length; i++) { r -= (items[i].weight || 0); if (r < 0) { pickedIdx = i; break; } }
-        // 高亮逐格跑，减速并恰好停在 pickedIdx
-        const len = items.length;
-        let cur = spinIdx % len;
-        const baseSteps = 14 + Math.floor(Math.random() * 8);
-        const steps = baseSteps + ((pickedIdx - (cur + baseSteps)) % len + len) % len;
-        for (let s = 0; s < steps; s++) {
-            cur = (cur + 1) % len;
-            setSpinIdx(cur);
-            await new Promise(rs => setTimeout(rs, 70 + s * 16));
+        let cum = 0;
+        const centers: number[] = [];
+        for (let i = 0; i < items.length; i++) {
+            const sweep = (items[i].weight || 0) / total * 360;
+            centers.push(cum + sweep / 2);
+            cum += sweep;
         }
+        let acc = 0;
+        pickedIdx = items.length - 1;
+        for (let i = 0; i < items.length; i++) {
+            acc += items[i].weight || 0;
+            if (r < acc) { pickedIdx = i; break; }
+        }
+        const targetMod = ((360 - centers[pickedIdx]) % 360 + 360) % 360;
+        const current = wheelRotation % 360;
+        const delta = ((targetMod - current) % 360 + 360) % 360;
+        const target = wheelRotation + 360 * 4 + delta;
+        setWheelRotation(target);
+        await new Promise(rs => setTimeout(rs, 3400));
         const picked = items[pickedIdx];
         const line = `${new Date().toLocaleDateString('zh-CN')}，${charNameOf(loserCharId)} 在宠物对战中败给 ${charNameOf(winnerCharId)}，转盘抽到惩罚：${picked.text}。`;
         appendCharMemory(loserCharId, line);
         setWheelSpun({ text: picked.text, memSaved: loserCharId !== 'user' });
         setPunishResult({ text: picked.text, memSaved: loserCharId !== 'user' });
-        addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（已写入记忆）' : ''}`, 'success');
-        // 角色败者 → 调一次 API 用口吻回应惩罚（横幅与战后感言同款；user 本人败者不调）
+        addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（回应将发到私聊）' : ''}`, 'success');
+        // 角色败者 → 生成回应并发进私聊（请求横幅 = 私聊同款 ChatBroadcast；弹窗随时可关，请求后台继续）
         if (loserCharId !== 'user') {
-            setWheelApi({ loading: true, text: '' });
-            try {
-                const persona = await buildCharPrompt(loserCharId);
-                const prompt = (meta.promptGacha ? meta.promptGacha : PROMPT_PUNISH_DEFAULT)
-                    .split('{人设}').join(persona)
-                    .split('{惩罚}').join(picked.text)
-                    .split('{赢家}').join(charNameOf(winnerCharId));
-                const cfg = pickModel();
-                const data = await safeFetchJson(
-                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-                        body: JSON.stringify({
-                            model: cfg.model,
-                            messages: [
-                                { role: 'system', content: prompt },
-                                { role: 'user', content: '认罚吧。' },
-                            ],
-                            temperature: 0.9, max_tokens: 1024, stream: false,
-                        }),
-                    },
-                    1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
-                );
-                const d2 = await data;
-                setWheelApi({ loading: false, text: extractContent(d2).slice(0, 120) });
-            } catch { setWheelApi({ loading: false, text: '' }); }
+            const loserName = charNameOf(loserCharId);
+            announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: loserCharId, charName: loserName });
+            (async () => {
+                let reaction = '';
+                try {
+                    const persona = await buildCharPrompt(loserCharId);
+                    const prompt = PROMPT_PUNISH_DEFAULT
+                        .split('{人设}').join(persona)
+                        .split('{惩罚}').join(picked.text)
+                        .split('{赢家}').join(charNameOf(winnerCharId));
+                    const cfg = pickModel();
+                    const data = await safeFetchJson(
+                        `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                            body: JSON.stringify({
+                                model: cfg.model,
+                                messages: [
+                                    { role: 'system', content: prompt },
+                                    { role: 'user', content: '认罚吧。' },
+                                ],
+                                temperature: 0.9, max_tokens: 1024, stream: false,
+                            }),
+                        },
+                        1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
+                    );
+                    const d2 = await data;
+                    reaction = extractContent(d2).slice(0, 200);
+                } catch { /* 回应失败不影响惩罚本身 */ }
+                if (reaction) {
+                    await DB.saveMessage({ charId: loserCharId, role: 'assistant', type: 'text', content: reaction });
+                    announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: loserCharId, charName: loserName });
+                }
+                announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: loserCharId, charName: loserName });
+            })();
         }
     };
 
@@ -846,7 +931,7 @@ const PetPvpApp: React.FC = () => {
                         <div className="rounded-2xl border border-[#7d7264]/30 bg-[#4a4438] p-3 space-y-2">
                             <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#c9bfae]">败者惩罚 · {loser.charName}</div>
                             {mode === 'wheel' && !punishResult && (
-                                <button onClick={() => { setWheelSpun(null); setWheelApi(null); setSpinIdx(0); setWheelModal({ loserCharId: loser.charId, winnerCharId }); }}
+                                <button onClick={() => { setWheelSpun(null); setWheelRotation(w => w % 360); setWheelModal({ loserCharId: loser.charId, winnerCharId }); }}
                                     className="w-full py-2 rounded-xl border border-amber-400/50 bg-[#5a5344] text-amber-200 text-xs font-bold active:scale-[0.98]">
                                     🎯 抽惩罚转盘
                                 </button>
@@ -945,57 +1030,120 @@ const PetPvpApp: React.FC = () => {
                 </div>
             )}
 
-            {/* 惩罚转盘弹窗：高亮轮转 → 落定写记忆 → 调 API 让败者口吻回应（横幅与感言同款） */}
+            {/* 惩罚转盘弹窗（圆形转盘）：旋转落定 → 写记忆 → 回应发到私聊（弹窗随时可关） */}
             {wheelModal && (() => {
                 const items = wheelItemsActive();
                 const loserName = charNameOf(wheelModal.loserCharId);
+                const total = items.reduce((s, i) => s + (i.weight || 0), 0) || 1;
+                const PALETTE = ['#f59e0b', '#fbbf24', '#f97316', '#fcd34d', '#fb923c', '#fde68a'];
+                let segStart = 0;
+                const stops: string[] = [];
+                const labels: Array<{ text: string; angle: number }> = [];
+                items.forEach((it, i) => {
+                    const sweep = (it.weight || 0) / total * 360;
+                    stops.push(`${PALETTE[i % PALETTE.length]} ${segStart}deg ${segStart + sweep}deg`);
+                    labels.push({ text: it.text, angle: segStart + sweep / 2 });
+                    segStart += sweep;
+                });
                 return (
-                    <div className="fixed inset-0 z-[220] bg-black/60 flex items-center justify-center p-6" onClick={() => { if (!wheelApi?.loading) setWheelModal(null); }}>
+                    <div className="fixed inset-0 z-[220] bg-black/60 flex items-center justify-center p-6" onClick={() => setWheelModal(null)}>
                         <div className="bg-white rounded-2xl w-full max-w-sm p-5 relative animate-fade-in" onClick={e => e.stopPropagation()}>
                             <div className="text-sm font-bold text-slate-800 text-center">🎯 惩罚转盘 · {loserName}</div>
-                            <div className="mt-3 space-y-1 max-h-56 overflow-y-auto">
-                                {items.map((it, i) => (
-                                    <div key={it.id || i} className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all duration-100 ${
-                                        i === spinIdx % Math.max(items.length, 1) ? 'bg-amber-100 border border-amber-400 text-amber-700 scale-[1.02]' : 'bg-slate-50 text-slate-500 border border-transparent'
-                                    }`}>
-                                        <span className="flex-1">{it.text}</span>
-                                        <span className="text-[9px] opacity-60">权重 {it.weight}</span>
-                                    </div>
-                                ))}
+                            {/* 圆形转盘：指针在上，转动后停在落定扇区 */}
+                            <div className="relative w-60 h-60 mx-auto mt-3">
+                                <div className="absolute -top-1 left-1/2 -translate-x-1/2 z-10 text-lg">▼</div>
+                                <div className="absolute inset-0 rounded-full border-4 border-slate-200 shadow-inner overflow-hidden"
+                                    style={{ background: `conic-gradient(from -90deg, ${stops.join(', ')})`, transform: `rotate(${wheelRotation}deg)`, transition: 'transform 3.2s cubic-bezier(0.15, 0.85, 0.25, 1)' }}>
+                                    {labels.map((l, i) => (
+                                        <div key={i} className="absolute left-1/2 top-1/2 w-0 h-0">
+                                            <div className="absolute text-[9px] font-bold text-slate-700 whitespace-nowrap"
+                                                style={{ transform: `rotate(${l.angle}deg) translate(0, -78px) rotate(${-l.angle}deg) translate(-50%, -50%)` }}>
+                                                {l.text.length > 9 ? l.text.slice(0, 9) + '…' : l.text}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white border-2 border-slate-200 shadow flex items-center justify-center text-sm">🐾</div>
                             </div>
+                            {wheelSpun && (
+                                <div className="mt-3 rounded-xl bg-amber-50 border border-amber-300 px-3 py-2 text-center">
+                                    <div className="text-xs font-bold text-amber-700">🎯 {wheelSpun.text}</div>
+                                    <div className="text-[9px] text-amber-500 mt-0.5">
+                                        已写进 {loserName} 的记忆{wheelModal.loserCharId !== 'user' ? ' · 回应正在发到私聊（可随时关闭本窗口）' : ''}
+                                    </div>
+                                </div>
+                            )}
                             {!wheelSpun && (
                                 <button onClick={runWheelSpin} disabled={items.length === 0}
                                     className="w-full mt-3 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold active:scale-[0.98] disabled:opacity-40">转！</button>
                             )}
-                            {wheelSpun && (
-                                <div className="mt-3 space-y-2">
-                                    <div className="rounded-xl bg-amber-50 border border-amber-300 px-3 py-2 text-center">
-                                        <div className="text-xs font-bold text-amber-700">🎯 {wheelSpun.text}</div>
-                                        {wheelSpun.memSaved && <div className="text-[9px] text-amber-500 mt-0.5">已写进 {loserName} 的记忆</div>}
-                                    </div>
-                                    {wheelApi?.loading && (
-                                        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-center animate-pulse">
-                                            <span className="text-xs font-bold text-amber-600">{meta.narrationBannerText || NARRATION_BANNER_DEFAULT}</span>
-                                            <span className="text-[10px] text-amber-500 ml-2">正在请求回应…</span>
-                                        </div>
-                                    )}
-                                    {wheelApi && !wheelApi.loading && wheelApi.text && (
-                                        <p className="text-[11px] text-slate-600 italic text-center">「{wheelApi.text}」</p>
-                                    )}
-                                    <button onClick={() => setWheelModal(null)} className="w-full py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold">关闭</button>
-                                </div>
-                            )}
+                            <button onClick={() => setWheelModal(null)} className={`w-full py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold ${wheelSpun ? 'mt-2' : 'mt-2'}`}>{wheelSpun ? '关闭（请求后台继续）' : '关闭'}</button>
                         </div>
                     </div>
                 );
             })()}
+
+            {/* 宠物池模板管理弹窗（顶栏齿轮打开） */}
+            {tplModalOpen && (
+                <div className="fixed inset-0 z-[215] bg-black/50 flex items-center justify-center p-6" onClick={() => setTplModalOpen(false)}>
+                    <div className="bg-white rounded-2xl w-full max-w-sm p-5 relative animate-fade-in max-h-[85%] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-3">
+                            <span className="text-sm font-bold text-slate-800">🐾 宠物池模板管理（名字+形象+权重，不绑定角色）</span>
+                            <button onClick={() => setTplModalOpen(false)} className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 text-xs">✕</button>
+                        </div>
+                        <div className="space-y-3">
+                            <input value={tplName} onChange={e => setTplName(e.target.value)} placeholder="宠物名字" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" />
+                            <textarea value={tplKaomoji} onChange={e => setTplKaomoji(e.target.value)} placeholder={`颜文字 / 点阵图（不传图片时显示，点阵标准：最多 ${DOT_MAX_LINES} 行 × ${DOT_MAX_COLS} 字/行）`} rows={3}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
+                            {tplKaomoji.trim() && (() => { const m = dotMeasure(tplKaomoji); const over = m.lines > DOT_MAX_LINES || m.cols > DOT_MAX_COLS; return (
+                                <p className={`text-[9px] ${over ? 'text-rose-500 font-bold' : 'text-slate-400'}`}>{m.lines} 行 / 最宽 {m.cols} 字（标准 {DOT_MAX_LINES} 行 × {DOT_MAX_COLS} 字）{over ? ' — 超了，入池会被拦截' : ''}</p>
+                            ); })()}
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => tplFileRef.current?.click()} className="px-3 py-2 rounded-xl bg-slate-100 text-xs font-bold text-slate-600">插入图片</button>
+                                {tplImageRef && <TokenImg value={tplImageRef} className="w-9 h-9 rounded-lg object-cover" />}
+                                <input type="file" ref={tplFileRef} className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) handleTplImage(f); e.target.value = ''; }} />
+                                <div className="flex items-center gap-1 ml-auto">
+                                    <span className="text-[10px] text-slate-400">权重</span>
+                                    <input type="number" min={1} value={tplWeight} onChange={e => setTplWeight(parseInt(e.target.value) || 1)} className="w-16 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none" />
+                                </div>
+                            </div>
+                            <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-fuchsia-500 text-white text-sm font-bold active:scale-[0.98]">加入池子</button>
+                            {templates.length > 0 && (
+                                <div className="space-y-2 pt-2 border-t border-slate-100">
+                                    {templates.map(t => (
+                                        <div key={t.id} className="flex items-center gap-2">
+                                            <PetVisual pet={t} size="w-9 h-9" boxPx={36} />
+                                            <span className="flex-1 text-xs font-bold text-slate-600 truncate">{t.name}</span>
+                                            <span className="text-[9px] text-slate-400">权重 {t.weight}</span>
+                                            <button onClick={() => handleDeleteTemplate(t.id)} className="text-slate-300 hover:text-red-400 px-1">×</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <p className="text-[9px] text-slate-400">池子概率制永不抽空：命中模板 = 以它的名字形象出新宠物（属性照常重掷）；未命中 = 词库随机生成。</p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* 顶栏 */}
             <div className="shrink-0 z-10 sticky top-0 bg-white/80 backdrop-blur-md border-b border-slate-200/60" style={{ paddingTop: 'var(--safe-top)' }}>
                 <div className="pt-12 pb-3 px-4 flex items-center justify-between">
                     <button onClick={closeApp} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">←</button>
                     <span className="font-bold text-slate-700">🐾 宠物对战</span>
-                    <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">🪙 {goldOf('user')}</span>
+                    <div className="flex items-center gap-1.5">
+                        {tab === 'gacha' || (meta.punishMode || 'wheel') !== 'wheel' ? (
+                            <button onClick={togglePunishMode} title="点击切换惩罚模式：金币=赌钱，轮盘=转盘"
+                                className="text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full active:scale-95">
+                                🪙 {tab === 'gacha' ? goldOf(gachaCharId || 'user') : goldOf('user')}
+                            </button>
+                        ) : (
+                            <button onClick={togglePunishMode} title="轮盘惩罚模式中（点击切回赌钱模式）"
+                                className="text-sm bg-violet-50 px-2.5 py-1 rounded-full active:scale-95">🎯</button>
+                        )}
+                        <button onClick={() => setTplModalOpen(true)} title="宠物池模板管理"
+                            className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 text-xs flex items-center justify-center active:scale-90">⚙</button>
+                    </div>
                 </div>
                 {/* Tabs */}
                 <div className="flex gap-1 px-4 pb-2">
@@ -1012,41 +1160,6 @@ const PetPvpApp: React.FC = () => {
                 {/* ─── 抽奖 ─── */}
                 {tab === 'gacha' && (
                     <div className="space-y-4">
-                        {/* 池子模板管理（折叠） */}
-                        <details className="bg-white rounded-2xl border border-slate-200/70 overflow-hidden">
-                            <summary className="px-4 py-3 text-xs font-bold text-slate-600 cursor-pointer">🐾 宠物池模板管理（名字+形象+权重，不绑定角色）</summary>
-                            <div className="p-4 pt-0 space-y-3">
-                                <input value={tplName} onChange={e => setTplName(e.target.value)} placeholder="宠物名字" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" />
-                                <textarea value={tplKaomoji} onChange={e => setTplKaomoji(e.target.value)} placeholder={`颜文字 / 点阵图（不传图片时显示，点阵标准：最多 ${DOT_MAX_LINES} 行 × ${DOT_MAX_COLS} 字/行）`} rows={3}
-                                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
-                                {tplKaomoji.trim() && (() => { const m = dotMeasure(tplKaomoji); const over = m.lines > DOT_MAX_LINES || m.cols > DOT_MAX_COLS; return (
-                                    <p className={`text-[9px] ${over ? 'text-rose-500 font-bold' : 'text-slate-400'}`}>{m.lines} 行 / 最宽 {m.cols} 字（标准 {DOT_MAX_LINES} 行 × {DOT_MAX_COLS} 字）{over ? ' — 超了，入池会被拦截' : ''}</p>
-                                ); })()}
-                                <div className="flex items-center gap-2">
-                                    <button onClick={() => tplFileRef.current?.click()} className="px-3 py-2 rounded-xl bg-slate-100 text-xs font-bold text-slate-600">插入图片</button>
-                                    {tplImageRef && <TokenImg value={tplImageRef} className="w-9 h-9 rounded-lg object-cover" />}
-                                    <input type="file" ref={tplFileRef} className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) handleTplImage(f); e.target.value = ''; }} />
-                                    <div className="flex items-center gap-1 ml-auto">
-                                        <span className="text-[10px] text-slate-400">权重</span>
-                                        <input type="number" min={1} value={tplWeight} onChange={e => setTplWeight(parseInt(e.target.value) || 1)} className="w-16 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none" />
-                                    </div>
-                                </div>
-                                <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-fuchsia-500 text-white text-sm font-bold active:scale-[0.98]">加入池子</button>
-                                {templates.length > 0 && (
-                                    <div className="space-y-2 pt-2 border-t border-slate-100">
-                                        {templates.map(t => (
-                                            <div key={t.id} className="flex items-center gap-2">
-                                                <PetVisual pet={t} size="w-9 h-9" boxPx={36} />
-                                                <span className="flex-1 text-xs font-bold text-slate-600 truncate">{t.name}</span>
-                                                <span className="text-[9px] text-slate-400">权重 {t.weight}</span>
-                                                <button onClick={() => handleDeleteTemplate(t.id)} className="text-slate-300 hover:text-red-400 px-1">×</button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <p className="text-[9px] text-slate-400">池子概率制永不抽空：命中模板 = 以它的名字形象出新宠物（属性照常重掷）；未命中 = 词库随机生成。</p>
-                            </div>
-                        </details>
                         <div className="bg-white rounded-2xl p-4 border border-slate-200/70">
                             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">谁去抽奖（你也能抽）</label>
                             <select value={gachaCharId} onChange={e => setGachaCharId(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none">
@@ -1248,12 +1361,11 @@ const PetPvpApp: React.FC = () => {
                                 {/* 败者惩罚 */}
                                 <div className="pt-2 border-t border-slate-100">
                                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">败者惩罚</label>
-                                    <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-2">
-                                        {([['wheel', '转盘'], ['bet', '赌钱'], ['off', '关']] as Array<['wheel' | 'bet' | 'off', string]>).map(([id, label]) => (
-                                            <button key={id} onClick={async () => { const next = { ...meta, punishMode: id }; setMeta(next); await DB.savePetMeta(next); }}
-                                                className={`flex-1 py-1.5 rounded text-[10px] font-bold ${meta.punishMode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
-                                        ))}
-                                    </div>
+                                    <p className="text-[9px] text-slate-400 mb-2">模式在右上角切换：点 <b>金币</b> 切到赌钱模式，点 <b>轮盘图标</b> 切到转盘模式（抽奖页会自动显示金币余额）。</p>
+                                    <button onClick={async () => { const next = { ...meta, punishMode: (meta.punishMode || 'wheel') === 'off' ? 'wheel' as const : 'off' as const }; setMeta(next); await DB.savePetMeta(next); }}
+                                        className={`w-full py-1.5 rounded-lg text-[10px] font-bold border ${meta.punishMode === 'off' ? 'border-slate-300 text-slate-400' : 'border-rose-200 text-rose-500'}`}>
+                                        {meta.punishMode === 'off' ? '惩罚已关闭（点击启用）' : '关闭惩罚'}
+                                    </button>
                                     {(meta.punishMode || 'wheel') === 'wheel' && (() => {
                                         const items = meta.wheelItems ?? WHEEL_ITEMS_DEFAULT;
                                         const saveItems = async (next: typeof items) => { const m = { ...meta, wheelItems: next }; setMeta(m); await DB.savePetMeta(m); };
@@ -1308,13 +1420,23 @@ const PetPvpApp: React.FC = () => {
                                     <button key={id} onClick={() => setMode(id)} className={`flex-1 py-1.5 rounded text-[10px] font-bold ${mode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
                                 ))}
                             </div>
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">A 方角色（必须有活宠物）</label>
-                                <select value={sideAChar} onChange={e => setSideAChar(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none">
-                                    <option value="">自动选择…</option>
-                                    {participants.filter(p => aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}（{defaultPetOf(p.id)?.name || '无'}）</option>)}
-                                </select>
-                            </div>
+                            {/* 对阵标注 */}
+                            {mode === 'rvr' ? (
+                                <p className="text-[11px] font-bold text-slate-500 text-center bg-slate-50 rounded-xl py-2">🎲 脚本将随机匹配两位有宠物的角色</p>
+                            ) : (
+                                <p className="text-[11px] font-bold text-slate-600 text-center bg-slate-50 rounded-xl py-2">
+                                    A方 {sideAChar ? `${charNameOf(sideAChar)}·${defaultPetOf(sideAChar)?.name || '无'}` : '自动'} VS B方 {mode === 'avb' && sideBChar ? `${charNameOf(sideBChar)}·${defaultPetOf(sideBChar)?.name || '无'}` : '自动'}
+                                </p>
+                            )}
+                            {mode !== 'rvr' && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">A 方角色（只能选有活宠物的）</label>
+                                    <select value={sideAChar} onChange={e => setSideAChar(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none">
+                                        <option value="">自动选择…</option>
+                                        {participants.filter(p => aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}（{defaultPetOf(p.id)?.name || '无'}）</option>)}
+                                    </select>
+                                </div>
+                            )}
                             {mode === 'avb' && (
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">B 方角色</label>
@@ -1343,7 +1465,7 @@ const PetPvpApp: React.FC = () => {
                             </div>
                             <button onClick={startBattle} disabled={battling}
                                 className={`w-full py-3 rounded-2xl font-bold text-white transition-all ${battling ? 'bg-slate-300' : 'bg-gradient-to-r from-rose-500 to-fuchsia-500 active:scale-[0.98]'}`}>
-                                {battling ? '战斗结算中…' : '⚔ 开始对战'}
+                                {battling ? '战斗结算中…' : mode === 'rvr' ? '🎲 随机匹配' : '⚔ 开始对战'}
                             </button>
                         </div>
 
