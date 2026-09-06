@@ -4234,11 +4234,12 @@ export interface PetBattleRecord {
     createdAt: number;
 }
 
-/** 宠物 App 全局单例状态（id='main'）：金币与可调数值 */
+/** 宠物 App 全局单例状态（id='main'）：每角色独立金币 + 可调数值 + 抽卡动画自定义 */
 export interface PetMeta {
     id: string;                 // 'main'
-    gold: number;               // 初始 1000；抽奖 -100；押注/赢平在此循环
-    totalStatPoints: number;    // 攻速/闪避/暴击三项总和（默认 30，可调）
+    goldByChar: Record<string, number>; // 每个角色独立金币（'user' = 玩家本人）
+    totalStatPoints: number;    // 敏捷/闪避/暴击三项总和（默认 30，可调）
+    drawAnimUrl?: string;       // 抽卡动画自定义图片 URL（支持 GIF），空 = 默认盲文点阵猫
 }
 
 /**
