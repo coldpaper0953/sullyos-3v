@@ -51,6 +51,12 @@ const WHEEL_ITEMS_DEFAULT: Array<{ id: string; text: string; weight: number }> =
     { id: 'w5', text: 'Avatar 换成赢家指定图', weight: 10 },
 ];
 const NARRATION_BANNER_DEFAULT = '败者食尘，愿赌服输....';
+
+const PROMPT_PUNISH_DEFAULT = `{人设}
+
+你刚刚在宠物对战中败给 {赢家}，转盘抽到了惩罚：「{惩罚}」。
+
+请用你自己的口吻，对接受这个惩罚做出回应（一两句话，40 字以内），直接输出回应本身，不要输出其他内容。`;
 // 自定义盲文切帧：空行分隔多帧，无有效帧时回落默认三帧猫
 const parseAnimFrames = (raw?: string): string[] => {
     if (!raw || !raw.trim()) return DIG_FRAMES;
@@ -139,12 +145,16 @@ const PetPvpApp: React.FC = () => {
     const [eventIdx, setEventIdx] = useState(0);
     const logRef = useRef<HTMLDivElement>(null);
     const [battling, setBattling] = useState(false);
-    // 出千 / 战后感言横幅 / 败者惩罚
+    // 出千 / 战后感言横幅 / 败者惩罚（转盘弹窗）
     const [cheatUsed, setCheatUsed] = useState(false);
     const [narrating, setNarrating] = useState(false);
-    const [spinning, setSpinning] = useState(false);
-    const [spinText, setSpinText] = useState('');
+    const [wheelModal, setWheelModal] = useState<null | { loserCharId: string; winnerCharId: string }>(null);
+    const [spinIdx, setSpinIdx] = useState(0);
+    const [wheelSpun, setWheelSpun] = useState<null | { text: string; memSaved: boolean }>(null);
+    const [wheelApi, setWheelApi] = useState<null | { loading: boolean; text: string }>(null);
     const [punishResult, setPunishResult] = useState<null | { text: string; memSaved: boolean }>(null);
+    // 自定义盲文多帧编辑：每帧一个框（本地编辑态，存库时按空行合并）
+    const [frameBoxes, setFrameBoxes] = useState<string[] | null>(null);
 
     const charNameOf = (id: string) => id === 'user' ? (userProfile.name || '我') : (characters.find(c => c.id === id)?.name || '未知');
     const charAvatarOf = (id: string) => id === 'user' ? userProfile.avatar : characters.find(c => c.id === id)?.avatar;
@@ -637,26 +647,66 @@ const PetPvpApp: React.FC = () => {
         });
     };
 
-    // ─── 败者惩罚转盘：按权重抽一条，结果写进败者记忆 ───
-    const spinWheel = async (loserCharId: string, winnerCharId: string) => {
-        if (spinning) return;
-        const items = (meta.wheelItems && meta.wheelItems.length ? meta.wheelItems : WHEEL_ITEMS_DEFAULT).filter(i => (i.weight || 0) > 0 && i.text.trim());
+    // ─── 败者惩罚转盘（弹窗）：高亮逐格减速轮转 → 按权重落定 → 写记忆 → 调 API 让败者用口吻回应 ───
+    const wheelItemsActive = () =>
+        (meta.wheelItems && meta.wheelItems.length ? meta.wheelItems : WHEEL_ITEMS_DEFAULT).filter(i => (i.weight || 0) > 0 && i.text.trim());
+    const runWheelSpin = async () => {
+        if (!wheelModal) return;
+        const { loserCharId, winnerCharId } = wheelModal;
+        const items = wheelItemsActive();
         if (!items.length) { addToast('转盘是空的，先去设置里加惩罚条目', 'error'); return; }
-        setSpinning(true);
+        setWheelSpun(null);
+        setWheelApi(null);
         const total = items.reduce((s, i) => s + (i.weight || 0), 0);
         let r = Math.random() * total;
-        let picked = items[items.length - 1];
-        for (const it of items) { r -= (it.weight || 0); if (r < 0) { picked = it; break; } }
-        for (let i = 0; i < 10; i++) {
-            setSpinText(items[Math.floor(Math.random() * items.length)].text);
-            await new Promise(rs => setTimeout(rs, 140));
+        let pickedIdx = items.length - 1;
+        for (let i = 0; i < items.length; i++) { r -= (items[i].weight || 0); if (r < 0) { pickedIdx = i; break; } }
+        // 高亮逐格跑，减速并恰好停在 pickedIdx
+        const len = items.length;
+        let cur = spinIdx % len;
+        const baseSteps = 14 + Math.floor(Math.random() * 8);
+        const steps = baseSteps + ((pickedIdx - (cur + baseSteps)) % len + len) % len;
+        for (let s = 0; s < steps; s++) {
+            cur = (cur + 1) % len;
+            setSpinIdx(cur);
+            await new Promise(rs => setTimeout(rs, 70 + s * 16));
         }
-        setSpinText(picked.text);
+        const picked = items[pickedIdx];
         const line = `${new Date().toLocaleDateString('zh-CN')}，${charNameOf(loserCharId)} 在宠物对战中败给 ${charNameOf(winnerCharId)}，转盘抽到惩罚：${picked.text}。`;
         appendCharMemory(loserCharId, line);
+        setWheelSpun({ text: picked.text, memSaved: loserCharId !== 'user' });
         setPunishResult({ text: picked.text, memSaved: loserCharId !== 'user' });
         addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（已写入记忆）' : ''}`, 'success');
-        setSpinning(false);
+        // 角色败者 → 调一次 API 用口吻回应惩罚（横幅与战后感言同款；user 本人败者不调）
+        if (loserCharId !== 'user') {
+            setWheelApi({ loading: true, text: '' });
+            try {
+                const persona = await buildCharPrompt(loserCharId);
+                const prompt = (meta.promptGacha ? meta.promptGacha : PROMPT_PUNISH_DEFAULT)
+                    .split('{人设}').join(persona)
+                    .split('{惩罚}').join(picked.text)
+                    .split('{赢家}').join(charNameOf(winnerCharId));
+                const cfg = pickModel();
+                const data = await safeFetchJson(
+                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                        body: JSON.stringify({
+                            model: cfg.model,
+                            messages: [
+                                { role: 'system', content: prompt },
+                                { role: 'user', content: '认罚吧。' },
+                            ],
+                            temperature: 0.9, max_tokens: 1024, stream: false,
+                        }),
+                    },
+                    1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
+                );
+                const d2 = await data;
+                setWheelApi({ loading: false, text: extractContent(d2).slice(0, 120) });
+            } catch { setWheelApi({ loading: false, text: '' }); }
+        }
     };
 
     // ─── 宠物形象渲染（多行点阵按容器缩放字号，等宽不歪）───
@@ -786,7 +836,7 @@ const PetPvpApp: React.FC = () => {
                         ) : null))}
                     </div>
                 )}
-                {/* 败者惩罚：转盘（手点）/ 赌钱（结算时自动） */}
+                {/* 败者惩罚：转盘（弹窗手点）/ 赌钱（结算时自动），两个模式互不掺和 */}
                 {done && arena.record.committed && (meta.punishMode || 'wheel') !== 'off' && (() => {
                     const loserSide: 'a' | 'b' = arena.winner === 'a' ? 'b' : 'a';
                     const loser = loserSide === 'a' ? arena.a : arena.b;
@@ -796,9 +846,9 @@ const PetPvpApp: React.FC = () => {
                         <div className="rounded-2xl border border-[#7d7264]/30 bg-[#4a4438] p-3 space-y-2">
                             <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#c9bfae]">败者惩罚 · {loser.charName}</div>
                             {mode === 'wheel' && !punishResult && (
-                                <button onClick={() => spinWheel(loser.charId, winnerCharId)} disabled={spinning}
+                                <button onClick={() => { setWheelSpun(null); setWheelApi(null); setSpinIdx(0); setWheelModal({ loserCharId: loser.charId, winnerCharId }); }}
                                     className="w-full py-2 rounded-xl border border-amber-400/50 bg-[#5a5344] text-amber-200 text-xs font-bold active:scale-[0.98]">
-                                    {spinning ? `🎯 ${spinText}` : '🎯 转转盘定惩罚'}
+                                    🎯 抽惩罚转盘
                                 </button>
                             )}
                             {punishResult && (
@@ -894,6 +944,51 @@ const PetPvpApp: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* 惩罚转盘弹窗：高亮轮转 → 落定写记忆 → 调 API 让败者口吻回应（横幅与感言同款） */}
+            {wheelModal && (() => {
+                const items = wheelItemsActive();
+                const loserName = charNameOf(wheelModal.loserCharId);
+                return (
+                    <div className="fixed inset-0 z-[220] bg-black/60 flex items-center justify-center p-6" onClick={() => { if (!wheelApi?.loading) setWheelModal(null); }}>
+                        <div className="bg-white rounded-2xl w-full max-w-sm p-5 relative animate-fade-in" onClick={e => e.stopPropagation()}>
+                            <div className="text-sm font-bold text-slate-800 text-center">🎯 惩罚转盘 · {loserName}</div>
+                            <div className="mt-3 space-y-1 max-h-56 overflow-y-auto">
+                                {items.map((it, i) => (
+                                    <div key={it.id || i} className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all duration-100 ${
+                                        i === spinIdx % Math.max(items.length, 1) ? 'bg-amber-100 border border-amber-400 text-amber-700 scale-[1.02]' : 'bg-slate-50 text-slate-500 border border-transparent'
+                                    }`}>
+                                        <span className="flex-1">{it.text}</span>
+                                        <span className="text-[9px] opacity-60">权重 {it.weight}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            {!wheelSpun && (
+                                <button onClick={runWheelSpin} disabled={items.length === 0}
+                                    className="w-full mt-3 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold active:scale-[0.98] disabled:opacity-40">转！</button>
+                            )}
+                            {wheelSpun && (
+                                <div className="mt-3 space-y-2">
+                                    <div className="rounded-xl bg-amber-50 border border-amber-300 px-3 py-2 text-center">
+                                        <div className="text-xs font-bold text-amber-700">🎯 {wheelSpun.text}</div>
+                                        {wheelSpun.memSaved && <div className="text-[9px] text-amber-500 mt-0.5">已写进 {loserName} 的记忆</div>}
+                                    </div>
+                                    {wheelApi?.loading && (
+                                        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-center animate-pulse">
+                                            <span className="text-xs font-bold text-amber-600">{meta.narrationBannerText || NARRATION_BANNER_DEFAULT}</span>
+                                            <span className="text-[10px] text-amber-500 ml-2">正在请求回应…</span>
+                                        </div>
+                                    )}
+                                    {wheelApi && !wheelApi.loading && wheelApi.text && (
+                                        <p className="text-[11px] text-slate-600 italic text-center">「{wheelApi.text}」</p>
+                                    )}
+                                    <button onClick={() => setWheelModal(null)} className="w-full py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold">关闭</button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* 顶栏 */}
             <div className="shrink-0 z-10 sticky top-0 bg-white/80 backdrop-blur-md border-b border-slate-200/60" style={{ paddingTop: 'var(--safe-top)' }}>
@@ -1075,13 +1170,35 @@ const PetPvpApp: React.FC = () => {
                                         <input value={meta.drawAnimUrl || ''} onChange={async e => { const next = { ...meta, drawAnimUrl: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }} placeholder="图片 URL（支持 GIF）" className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none" />
                                     )}
                                     {meta.drawAnimMode === 'braille' && (() => {
-                                        const frames = parseAnimFrames(meta.drawAnimBraille);
+                                        const boxes = frameBoxes ?? (meta.drawAnimBraille && meta.drawAnimBraille.trim() ? meta.drawAnimBraille.replace(/\r/g, '').split(/\n\s*\n/) : ['']);
+                                        const validFrames = parseAnimFrames(meta.drawAnimBraille);
+                                        const editFrame = async (i: number, v: string) => {
+                                            const next = boxes.map((b, bi) => bi === i ? v : b);
+                                            setFrameBoxes(next);
+                                            const joined = next.map(f => f.trim()).filter(f => f).join('\n\n') || undefined;
+                                            const m = { ...meta, drawAnimBraille: joined };
+                                            setMeta(m);
+                                            await DB.savePetMeta(m);
+                                        };
                                         return (
                                             <div className="space-y-2">
-                                                <textarea value={meta.drawAnimBraille || ''} onChange={async e => { const next = { ...meta, drawAnimBraille: e.target.value || undefined }; setMeta(next); await DB.savePetMeta(next); }} placeholder={`自定义盲文（留空 = 默认数码猫；多帧用空行分隔，就会逐帧轮换；每帧建议 ≤ ${DOT_MAX_LINES} 行 × ${DOT_MAX_COLS} 字）`} rows={4}
-                                                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
+                                                <p className="text-[9px] text-slate-400">每一帧一个框（和宠物点阵同一个标准：≤ {DOT_MAX_LINES} 行 × {DOT_MAX_COLS} 字），轮换播放；留空 = 默认数码猫三帧。</p>
+                                                {boxes.map((b, i) => (
+                                                    <div key={i} className="relative">
+                                                        <div className="text-[9px] font-bold text-slate-400 mb-0.5">第 {i + 1} 帧</div>
+                                                        <textarea value={b} onChange={e => editFrame(i, e.target.value)} rows={4}
+                                                            placeholder={`第 ${i + 1} 帧点阵（≤ ${DOT_MAX_LINES} 行 × ${DOT_MAX_COLS} 字）`}
+                                                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
+                                                        {boxes.length > 1 && (
+                                                            <button onClick={() => { const next = boxes.filter((_, bi) => bi !== i); setFrameBoxes(next); const joined = next.map(f => f.trim()).filter(f => f).join('\n\n') || undefined; const m = { ...meta, drawAnimBraille: joined }; setMeta(m); DB.savePetMeta(m); }}
+                                                                className="absolute top-0 right-0 px-1.5 py-0.5 text-rose-400 text-[10px] font-bold">✕</button>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                                <button onClick={() => setFrameBoxes([...boxes, ''])}
+                                                    className="w-full py-1.5 rounded-lg border border-dashed border-slate-300 text-slate-400 text-[10px] font-bold">＋ 加一帧</button>
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-[10px] text-slate-400">识别到 <b className="text-slate-600">{frames.length}</b> 帧（空行分隔）</span>
+                                                    <span className="text-[10px] text-slate-400">当前 <b className="text-slate-600">{validFrames.length}</b> 帧参与轮换</span>
                                                     <span className="text-[10px] text-slate-400 ml-auto">每帧</span>
                                                     <input type="number" min={60} step={20} value={meta.drawAnimInterval || DIG_INTERVAL_DEFAULT}
                                                         onChange={async e => { const v = Math.max(60, parseInt(e.target.value) || DIG_INTERVAL_DEFAULT); const next = { ...meta, drawAnimInterval: v }; setMeta(next); await DB.savePetMeta(next); }}
