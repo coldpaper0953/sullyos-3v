@@ -107,9 +107,20 @@ export function buildCombatant(
 }
 
 export interface BattleResult {
-    rounds: string[];      // 脚本战报流水（给 AI 播报用）
+    rounds: string[];      // 脚本战报流水（文字版）
+    events: BattleEvent[]; // 结构化事件流（战斗页面逐拍回放用）
     winner: 'a' | 'b';
     loser: 'a' | 'b';
+}
+
+export interface BattleEvent {
+    kind: 'start' | 'attack' | 'crit' | 'dodge' | 'chain' | 'ko' | 'exhaust' | 'win';
+    atkSide: 'a' | 'b';
+    round: number;
+    text: string;
+    hpA: number;   // 事件发生后的双方血量（回放时直接刷 HP 条）
+    hpB: number;
+    dmg?: number;
 }
 
 /**
@@ -118,6 +129,10 @@ export interface BattleResult {
  */
 export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRounds = 30): BattleResult {
     const rounds: string[] = [];
+    const events: BattleEvent[] = [];
+    const pushEvent = (kind: BattleEvent['kind'], atkSide: 'a' | 'b', round: number, text: string, dmg?: number) => {
+        events.push({ kind, atkSide, round, text, hpA: hpA, hpB: hpB, dmg });
+    };
     let hpA = sideA.hp, hpB = sideB.hp;
     // 先手：攻速高者；相同则随机
     let attackerIsA = sideA.spd === sideB.spd ? Math.random() < 0.5 : sideA.spd > sideB.spd;
@@ -126,7 +141,9 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
     const hpOf = (isA: boolean) => (isA ? hpA : hpB);
     const deal = (isA: boolean, dmg: number) => { if (isA) hpB = Math.max(0, hpB - dmg); else hpA = Math.max(0, hpA - dmg); };
 
-    rounds.push(`开局：${sideA.name}（HP ${sideA.hp}）vs ${sideB.name}（HP ${sideB.hp}），${attacker().name} 抢到先手。`);
+    const startText = `开局：${sideA.name}（HP ${sideA.hp}）vs ${sideB.name}（HP ${sideB.hp}），${attacker().name} 抢到先手。`;
+    rounds.push(startText);
+    pushEvent('start', attackerIsA ? 'a' : 'b', 0, startText);
 
     let round = 1;
     let ended = false;
@@ -139,22 +156,30 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
             if (def.hp <= 0 || hpOf(!attackerIsA) <= 0) { ended = true; break; }
             // 闪避判定
             if (Math.random() * 100 < def.dodge) {
-                rounds.push(`第${round}回合：${atk.name} 发起攻击，被 ${def.name} 闪避了！`);
+                const t = `第${round}回合：${atk.name} 发起攻击，被 ${def.name} 闪避了！`;
+                rounds.push(t);
+                pushEvent('dodge', attackerIsA ? 'a' : 'b', round, t);
             } else {
                 const isCrit = Math.random() * 100 < atk.crit;
                 const dmg = Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1)));
                 deal(attackerIsA, dmg);
-                rounds.push(`第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`);
+                const t = `第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`;
+                rounds.push(t);
+                pushEvent(isCrit ? 'crit' : 'attack', attackerIsA ? 'a' : 'b', round, t, dmg);
             }
             if (hpOf(!attackerIsA) <= 0) {
-                rounds.push(`${def.name} 倒下了！`);
+                const t = `${def.name} 倒下了！`;
+                rounds.push(t);
+                pushEvent('ko', attackerIsA ? 'a' : 'b', round, t);
                 ended = true;
                 break;
             }
             // 敏捷保留回合判定
             chains++;
             if (chains >= 4 || Math.random() * 100 >= atk.spd) break;
-            rounds.push(`${atk.name} 身形一闪，抢在 ${def.name} 反应之前再次出手！`);
+            const t = `${atk.name} 身形一闪，抢在 ${def.name} 反应之前再次出手！`;
+            rounds.push(t);
+            pushEvent('chain', attackerIsA ? 'a' : 'b', round, t);
         }
         if (ended) break;
         attackerIsA = !attackerIsA; // 轮到对方
@@ -164,12 +189,16 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
     if (!ended) {
         // 回合耗尽：剩余血量比例定胜负
         const pctA = hpA / sideA.hp, pctB = hpB / sideB.hp;
-        rounds.push(`${maxRounds} 回合战罢，双方力竭——按剩余血量判定。`);
+        const t = `${maxRounds} 回合战罢，双方力竭——按剩余血量判定。`;
+        rounds.push(t);
+        pushEvent('exhaust', 'a', round, t);
         attackerIsA = pctA >= pctB;
     }
     const winner = attackerIsA ? 'a' : 'b';
-    rounds.push(`胜负已分：${(winner === 'a' ? sideA : sideB).name} 获胜！`);
-    return { rounds, winner, loser: winner === 'a' ? 'b' : 'a' };
+    const winText = `胜负已分：${(winner === 'a' ? sideA : sideB).name} 获胜！`;
+    rounds.push(winText);
+    pushEvent('win', winner, round, winText);
+    return { rounds, events, winner, loser: winner === 'a' ? 'b' : 'a' };
 }
 
 /** 押注赔率：模拟 sims 局算 A 方胜率，赔率 = 0.95 / 胜率（5% 抽水），下限 1.1 */

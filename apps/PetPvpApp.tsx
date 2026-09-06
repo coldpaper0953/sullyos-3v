@@ -2,11 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Pet, PetGrade, PetStats, PetBattleRecord, PetMeta, CharacterProfile } from '../types';
-import { safeFetchJson, safeResponseJson } from '../utils/safeApi';
+import { safeFetchJson } from '../utils/safeApi';
 import {
     PET_GRADE_BONUS, GRADE_WEIGHTS,
     rollGrade, rollStats, rollHp, rollPool,
-    buildCombatant, simulateBattle, estimateOdds, PetCombatant,
+    buildCombatant, simulateBattle, estimateOdds, PetCombatant, BattleEvent,
 } from '../utils/petEngine';
 import { putImageBlob, migrateDataUrlToRef, isImageValue, isBlobRef } from '../utils/blobRef';
 import { processImage } from '../utils/file';
@@ -58,10 +58,10 @@ const PetPvpApp: React.FC = () => {
     const [sideBChar, setSideBChar] = useState('');
     const [betSide, setBetSide] = useState<'a' | 'b' | null>(null);
     const [betAmount, setBetAmount] = useState(100);
-    const [battle, setBattle] = useState<PetBattleRecord | null>(null);
     const [battling, setBattling] = useState(false);
-    const [showRounds, setShowRounds] = useState(false);
-    const [avatarMode, setAvatarMode] = useState(false);
+    // 战斗页面：逐拍回放脚本事件流
+    const [arena, setArena] = useState<null | { a: PetCombatant; b: PetCombatant; events: BattleEvent[]; winner: 'a' | 'b'; record: PetBattleRecord }>(null);
+    const [eventIdx, setEventIdx] = useState(0);
 
     const charNameOf = (id: string) => characters.find(c => c.id === id)?.name || '未知';
 
@@ -77,6 +77,14 @@ const PetPvpApp: React.FC = () => {
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loaded]);
+
+    // 战斗页面逐拍回放计时器：每 1.2s 推进一个事件
+    useEffect(() => {
+        if (!arena) return;
+        if (eventIdx >= arena.events.length - 1) return;
+        const t = setTimeout(() => setEventIdx(i => Math.min(i + 1, arena.events.length - 1)), 1200);
+        return () => clearTimeout(t);
+    }, [arena, eventIdx]);
 
     const saveMeta = async (next: PetMeta) => { setMeta(next); await DB.savePetMeta(next); };
 
@@ -228,7 +236,7 @@ const PetPvpApp: React.FC = () => {
         }
         setBattling(true);
         try {
-            // 1. 脚本模拟（战斗结果 + 赔率预演）
+            // 1. 脚本模拟（战斗结果 + 赔率预演）——纯脚本，无 AI
             const result = simulateBattle(a, b, BATTLE_MAX_ROUNDS);
             const sim = estimateOdds(a, b, 200);
             const winnerCharId = result.winner === 'a' ? a.charId : b.charId;
@@ -240,33 +248,7 @@ const PetPvpApp: React.FC = () => {
                 if (won) await saveMeta({ ...meta, gold: meta.gold - betAmount + payout });
                 bet = { side: betSide, amount: betAmount, odds: betSide === 'a' ? sim.oddsA : sim.oddsB, won };
             }
-            // 3. AI 播报（一次调用：默认提示词 + 双方宠物数值 + 脚本战报 + 角色提示词；副 API 优先）
-            const llm = memoryPalaceConfig?.lightLLM?.baseUrl ? memoryPalaceConfig.lightLLM : null;
-            const useCfg = (llm && llm.baseUrl && llm.apiKey) ? llm : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model };
-            let narration = '';
-            try {
-                const petSheet = (c: PetCombatant) => `宠物「${c.name}」（${c.grade}级）——主人：${c.charName}；攻击 ${c.atk}；攻速 ${c.spd}/闪避 ${c.dodge}/暴击 ${c.crit}；HP ${c.maxHp}；形象：${c.imageRef ? '[图片]' : (c.kaomoji || '无')}${c.desc ? `；描述：${c.desc}` : ''}`;
-                const charPrompt = (id: string) => (characters.find(c => c.id === id)?.systemPrompt || '').slice(0, 800);
-                const data = await safeFetchJson(
-                    `${useCfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${useCfg.apiKey}` },
-                        body: JSON.stringify({
-                            model: useCfg.model,
-                            messages: [
-                                { role: 'system', content: `你是宠物对战的实况解说员。请用两位主人角色的口吻交替实况吐槽，像文游对话一样分段（每段一行，共 6~10 行），最后宣布胜者。不要复述数值，不要输出 JSON。\n\n【A 方角色人设】${charPrompt(a.charId)}\n【B 方角色人设】${charPrompt(b.charId)}` },
-                                { role: 'user', content: `【A 方宠物】${petSheet(a)}\n【B 方宠物】${petSheet(b)}\n【脚本战报（结果是定死的，照着写）】\n${result.rounds.join('\n')}` },
-                            ],
-                            temperature: 0.9, max_tokens: 1500, stream: false,
-                        }),
-                    },
-                    1, 120_000, { appName: '宠物对战', purpose: '战报播报' },
-                );
-                const data2 = await data;
-                narration = (data2.choices?.[0]?.message?.content || '').trim();
-            } catch { /* 播报失败 → 只显示脚本战报 */ }
-            // 4. 落库：记录 + 败方宠物删除（宠物死亡只能重抽）
+            // 3. 落库：记录 + 败方宠物删除（宠物死亡只能重抽）
             const record: PetBattleRecord = {
                 id: `pb-${Date.now()}`,
                 aCharId: a.charId, bCharId: b.charId,
@@ -274,7 +256,6 @@ const PetPvpApp: React.FC = () => {
                 aPetId: a.petId, bPetId: b.petId,
                 rounds: result.rounds,
                 winnerCharId,
-                narration,
                 bet,
                 createdAt: Date.now(),
             };
@@ -285,9 +266,10 @@ const PetPvpApp: React.FC = () => {
                 await DB.deletePet(loserPetId);
                 setPets(prev => prev.filter(p => p.id !== loserPetId));
             }
-            setBattle(record);
-            setShowRounds(false);
             if (bet) addToast(bet.won ? `押中！赢得 ${Math.round(betAmount * bet.odds)} 金币` : `押错了，损失 ${betAmount} 金币`, bet.won ? 'success' : 'error');
+            // 4. 打开战斗页面逐拍回放
+            setEventIdx(0);
+            setArena({ a, b, events: result.events, winner: result.winner, record });
         } finally {
             setBattling(false);
         }
@@ -303,30 +285,90 @@ const PetPvpApp: React.FC = () => {
         );
     };
 
-    // ─── 战报渲染（文游立绘 / 头像两种模式）───
-    const renderNarration = (record: PetBattleRecord) => {
-        const aChar = characters.find(c => c.id === record.aCharId);
-        const bChar = characters.find(c => c.id === record.bCharId);
-        const lines = (record.narration || record.rounds.join('\n')).split('\n').map(l => l.trim()).filter(Boolean);
+    // ─── 战斗页面（纯脚本逐拍回放：双宠物上台 + HP 条 + 事件文本 + 飘字）───
+    const renderArena = () => {
+        if (!arena) return null;
+        const ev = arena.events[Math.min(eventIdx, arena.events.length - 1)];
+        const done = eventIdx >= arena.events.length - 1;
+        const hpPctA = Math.max(0, Math.round((ev.hpA / Math.max(arena.a.maxHp, 1)) * 100));
+        const hpPctB = Math.max(0, Math.round((ev.hpB / Math.max(arena.b.maxHp, 1)) * 100));
+        const hpBar = (pct: number, fromRight: boolean) => (
+            <div className={`h-3 bg-slate-200 rounded-full overflow-hidden ${fromRight ? 'flex justify-end' : ''}`}>
+                <div className={`h-full rounded-full transition-all duration-500 ${pct > 50 ? 'bg-emerald-400' : pct > 20 ? 'bg-amber-400' : 'bg-rose-400'}`}
+                    style={{ width: `${pct}%` }} />
+            </div>
+        );
+        const atkVisual = (side: 'a' | 'b', isAttacking: boolean) => {
+            const c = side === 'a' ? arena.a : arena.b;
+            const shaking = isAttacking && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'dodge');
+            const hurt = !isAttacking && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'ko');
+            return (
+                <div className="flex flex-col items-center gap-1">
+                    <div className={`${shaking ? 'translate-x-2' : ''} ${hurt ? 'animate-pulse opacity-60' : ''} transition-all duration-300`}>
+                        <PetVisual pet={c} size="w-20 h-20" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600">{c.charName}</span>
+                    <span className="text-[9px] text-slate-400">{c.name}</span>
+                </div>
+            );
+        };
         return (
-            <div className="space-y-3">
-                {lines.map((line, i) => {
-                    const isA = i % 2 === 0;
-                    const char = isA ? aChar : bChar;
-                    const isSystem = /^[【\[]|胜负已分|倒下了/.test(line);
-                    if (isSystem) return <div key={i} className="text-center text-[10px] text-slate-400 font-bold tracking-wider my-2">{line}</div>;
-                    return (
-                        <div key={i} className={`flex gap-2 ${isA ? '' : 'flex-row-reverse'}`}>
-                            {avatarMode
-                                ? <TokenImg value={char?.avatar} className="w-8 h-8 rounded-full object-cover shrink-0 border border-white/20" />
-                                : <TokenImg value={char?.avatar} className="w-12 h-16 object-cover object-top rounded-md shrink-0 border border-white/10" />}
-                            <div className={`max-w-[75%] px-3 py-2 rounded-xl text-xs leading-relaxed ${isA ? 'bg-slate-100 text-slate-700' : 'bg-primary/10 text-slate-700'}`}>
-                                <div className="text-[9px] font-bold opacity-50 mb-0.5">{char?.name || (isA ? record.aName : record.bName)}</div>
-                                {line}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200/70 space-y-3">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                    <span>{arena.a.name}</span>
+                    <span className="text-[10px] text-slate-400">{ev.round > 0 ? `第 ${ev.round} 回合` : '开场'}</span>
+                    <span>{arena.b.name}</span>
+                </div>
+                {/* HP 条 */}
+                <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                        <span className="text-[9px] text-slate-400 w-8">A</span>
+                        {hpBar(hpPctA, false)}
+                        <span className="text-[9px] text-slate-500 w-8 text-right">{ev.hpA}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className="text-[9px] text-slate-400 w-8">B</span>
+                        {hpBar(hpPctB, false)}
+                        <span className="text-[9px] text-slate-500 w-8 text-right">{ev.hpB}</span>
+                    </div>
+                </div>
+                {/* 竞技场 */}
+                <div className="relative bg-gradient-to-b from-sky-50 to-slate-100 rounded-xl p-4 min-h-[110px] flex items-center justify-between overflow-hidden">
+                    {atkVisual('a', ev.atkSide === 'a')}
+                    <div className="text-center">
+                        <div className="text-[10px] font-black text-slate-300">VS</div>
+                        {(ev.kind === 'attack' || ev.kind === 'crit') && ev.dmg != null && (
+                            <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 text-lg font-black animate-fade-in ${ev.kind === 'crit' ? 'text-rose-500' : 'text-slate-600'}`}>
+                                -{ev.dmg}{ev.kind === 'crit' ? '!' : ''}
                             </div>
+                        )}
+                        {ev.kind === 'dodge' && <div className="absolute top-1/2 left-1/2 -translate-x-1/2 text-sm font-bold text-sky-400 animate-fade-in">闪避!</div>}
+                    </div>
+                    {atkVisual('b', ev.atkSide === 'b')}
+                </div>
+                {/* 当前事件文本 */}
+                <div className={`text-center text-xs leading-relaxed rounded-lg py-2 px-3 ${ev.kind === 'crit' ? 'bg-rose-50 text-rose-600 font-bold' : ev.kind === 'win' ? 'bg-amber-50 text-amber-700 font-bold' : 'bg-slate-50 text-slate-600'}`}>
+                    {ev.text}
+                </div>
+                {/* 控制 */}
+                {done ? (
+                    <div className="space-y-2 animate-fade-in">
+                        <div className="text-center text-sm font-bold text-amber-600 bg-amber-50 rounded-xl py-2">
+                            🏆 {(arena.winner === 'a' ? arena.a.charName : arena.b.charName)} 的 {(arena.winner === 'a' ? arena.a.name : arena.b.name)} 获胜！
+                            {arena.record.bet ? `（押注${arena.record.bet.won ? '赢' : '输'} ${arena.record.bet.amount} 金币）` : ''}
                         </div>
-                    );
-                })}
+                        <button onClick={() => setArena(null)} className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold">关闭战斗页面</button>
+                    </div>
+                ) : (
+                    <button onClick={() => setEventIdx(arena.events.length - 1)} className="w-full py-2 rounded-xl bg-slate-100 text-slate-500 text-[10px] font-bold">跳过动画 ▶▶</button>
+                )}
+                {/* 脚本战报折叠 */}
+                <details className="text-[10px] text-slate-400">
+                    <summary className="cursor-pointer font-bold">脚本战报（{arena.record.rounds.length} 条）</summary>
+                    <div className="mt-1 space-y-0.5 max-h-48 overflow-y-auto">
+                        {arena.record.rounds.map((r, i) => <div key={i} className="font-mono">{r}</div>)}
+                    </div>
+                </details>
             </div>
         );
     };
@@ -485,27 +527,8 @@ const PetPvpApp: React.FC = () => {
                             </button>
                         </div>
 
-                        {/* 战报展示 */}
-                        {battle && (
-                            <div className="bg-white rounded-2xl p-4 border border-slate-200/70 space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div className="text-sm font-bold text-slate-700">{battle.aName} vs {battle.bName}</div>
-                                    <button onClick={() => setAvatarMode(v => !v)} className="text-[9px] font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-500">
-                                        {avatarMode ? '切立绘' : '切头像'}
-                                    </button>
-                                </div>
-                                <div className="text-[10px] text-slate-400">胜者：{charNameOf(battle.winnerCharId)}{battle.bet ? ` · 押注${battle.bet.won ? '赢' : '输'} ${battle.bet.amount} 金币` : ''}</div>
-                                {renderNarration(battle)}
-                                <button onClick={() => setShowRounds(v => !v)} className="text-[10px] font-bold text-violet-500">
-                                    {showRounds ? '收起脚本战报' : '查看脚本战报'}
-                                </button>
-                                {showRounds && (
-                                    <div className="bg-slate-50 rounded-xl p-3 space-y-1 max-h-60 overflow-y-auto">
-                                        {battle.rounds.map((r, i) => <div key={i} className="text-[10px] text-slate-500 font-mono">{r}</div>)}
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                        {/* 战斗页面（逐拍回放） */}
+                        {renderArena()}
                     </div>
                 )}
 
