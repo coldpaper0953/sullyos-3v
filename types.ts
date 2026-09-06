@@ -4245,6 +4245,8 @@ export interface PetMeta {
     drawAnimUrl?: string;       // 抽卡动画自定义图片 URL（支持 GIF），空 = 默认盲文点阵猫
     drawAnimMode?: 'braille' | 'image'; // 抽卡动画模式：braille=盲文点阵（默认）/ image=自定义图片
     drawAnimBraille?: string;   // 盲文模式自定义盲文（多帧用空行分隔则轮换）
+    drawAnimInterval?: number;  // 盲文帧轮换间隔毫秒（默认 280）
+    defaultPetByChar?: Record<string, string>; // 每角色默认出战宠物（petId）；默认死了按抽取时间自动顺延
     promptGacha?: string;       // 抽卡评价提示词模板（占位符可替换）
     promptBattle?: string;      // 战报播报提示词模板（占位符可替换）
     modelMode?: 'sub' | 'main'; // AI 调用模型：sub=副API（默认）/ main=主聊天模型
