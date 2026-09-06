@@ -119,6 +119,13 @@ const PetPvpApp: React.FC = () => {
         const t = setTimeout(() => setArenaPhase('battle'), 2400);
         return () => clearTimeout(t);
     }, [arena, arenaPhase]);
+    // 抽卡弹窗：dig 阶段盲文帧 280ms 轮换，2.8s 后静止揭晓（卡片不动，只有盲文动）
+    useEffect(() => {
+        if (!drawScene || drawScene.phase !== 'dig') return;
+        const rot = setInterval(() => setDigFrame(f => f + 1), 280);
+        const t = setTimeout(() => setDrawScene(s => (s && s.phase === 'dig' ? { ...s, phase: 'reveal' } : s)), 2800);
+        return () => { clearInterval(rot); clearTimeout(t); };
+    }, [drawScene]);
     useEffect(() => {
         if (!arena || arenaPhase !== 'battle') return;
         if (eventIdx >= arena.events.length - 1) return;
@@ -324,7 +331,10 @@ const PetPvpApp: React.FC = () => {
             if (!alt) { addToast('没有第二个有宠物的角色，先去抽奖', 'error'); return null; }
             bId = alt;
         }
-        return [combatantOf(aId), combatantOf(bId)];
+        const a = combatantOf(aId);
+        const b = combatantOf(bId);
+        if (!a || !b) return null;
+        return [a, b];
     };
 
     // 战报记忆压缩：把上一场（及所有未压缩的）战报压成一句话记忆，追加进双方角色的记忆
