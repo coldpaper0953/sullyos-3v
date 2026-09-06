@@ -37,6 +37,7 @@ import {
   Wrench,
   HouseLine,
   AddressBook,
+  PawPrint,
 } from '@phosphor-icons/react';
 
 // SVG 图标库 - Phosphor Icons
@@ -78,6 +79,7 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   CharCreatorDev: ({ className }) => <Wrench className={className} weight="regular" />,
   WorldHome: ({ className }) => <HouseLine className={className} weight="regular" />,
   Contacts: ({ className }) => <AddressBook className={className} weight="regular" />,
+  Pet: ({ className }) => <PawPrint className={className} weight="regular" />,
 };
 
 export const INSTALLED_APPS: AppConfig[] = [
@@ -100,6 +102,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Social, name: 'Spark', icon: 'Social', color: 'red' },
   { id: AppID.Study, name: '自习室', icon: 'Study', color: 'emerald' },
   { id: AppID.Game, name: 'TRPG', icon: 'Game', color: 'orange' },
+  { id: AppID.PetPvp, name: '宠物对战', icon: 'Pet', color: 'fuchsia' },
   { id: AppID.Novel, name: '笔友会', icon: 'Novel', color: 'amber' },
   { id: AppID.Songwriting, name: '写歌', icon: 'Songwriting', color: 'fuchsia' },
   { id: AppID.VRWorld, name: '彼方', icon: 'VRWorld', color: 'indigo' },

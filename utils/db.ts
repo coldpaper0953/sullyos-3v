@@ -10,7 +10,8 @@ import {
     LifeRecord, MedPlan, LifeRecordSettings, CharacterGroup,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
     WorldProfile, WorldEpisode, StoryTheaterEntry, StoryTheaterPreset, StoryTheaterMask,
-    BackendConversationEventRecord
+    BackendConversationEventRecord,
+    Pet, PetBattleRecord, PetMeta
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -33,7 +34,9 @@ const DB_NAME = 'AetherOS_Data';
 //      升级回调永不触发，v72 的两张新表一直没建出来（deleteMessages 等报 store 不存在）。
 // v74：修复该事故——版本号推到 74，从任何 ≤74 的旧库（含 v73）升级都会跑一遍幂等建表，
 //      补齐 backend_sync_queue / backend_events 及此前一切缺失的 store。
-const DB_VERSION = 74;
+// v75：宠物对战（PetPvp App）—— pets 宠物与池子模板、pet_battles 对战记录、
+//      pet_meta 全局单例（金币/数值设置）。
+const DB_VERSION = 75;
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -93,6 +96,9 @@ const STORE_STORY_THEATER_PRESETS = 'story_theater_presets'; // 糯米机原生�
 const STORE_STORY_THEATER_MASKS = 'story_theater_masks'; // 剧场原创人物面具
 const STORE_BACKEND_SYNC_QUEUE = 'backend_sync_queue';
 const STORE_BACKEND_EVENTS = 'backend_events';
+const STORE_PETS = 'pets';                 // 宠物对战：宠物与池子模板（kind 区分）
+const STORE_PET_BATTLES = 'pet_battles';   // 宠物对战：对战记录（脚本战报 + AI 播报）
+const STORE_PET_META = 'pet_meta';         // 宠物对战：全局单例（金币/数值设置），id='main'
 
 function queueBackendMessageDeletion(queue: IDBObjectStore, message: Message | undefined): void {
   if (!message?.charId || message.groupId) return;
@@ -393,6 +399,11 @@ export const openDB = (): Promise<IDBDatabase> => {
           eventStore.createIndex('charId', 'charId', { unique: false });
           eventStore.createIndex('eventType', 'eventType', { unique: false });
       }
+
+      // v75: 宠物对战 —— 宠物与池子模板 / 对战记录 / 全局单例（金币与设置）
+      createStore(STORE_PETS, { keyPath: 'id' });
+      createStore(STORE_PET_BATTLES, { keyPath: 'id' });
+      createStore(STORE_PET_META, { keyPath: 'id' });
 
       // ─── Memory Palace (记忆宫殿) stores ───
       if (!db.objectStoreNames.contains('memory_nodes')) {
@@ -2340,6 +2351,63 @@ export const DB = {
       const db = await openDB();
       const transaction = db.transaction(STORE_GAMES, 'readwrite');
       transaction.objectStore(STORE_GAMES).delete(id);
+  },
+
+  // ─── 宠物对战（PetPvp）───
+  getAllPets: async (): Promise<Pet[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_PETS)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PETS, 'readonly');
+          const request = transaction.objectStore(STORE_PETS).getAll();
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  savePet: async (pet: Pet): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_PETS, 'readwrite');
+      transaction.objectStore(STORE_PETS).put(pet);
+  },
+
+  deletePet: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_PETS, 'readwrite');
+      transaction.objectStore(STORE_PETS).delete(id);
+  },
+
+  getAllPetBattles: async (): Promise<PetBattleRecord[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_PET_BATTLES)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PET_BATTLES, 'readonly');
+          const request = transaction.objectStore(STORE_PET_BATTLES).getAll();
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  savePetBattle: async (record: PetBattleRecord): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_PET_BATTLES, 'readwrite');
+      transaction.objectStore(STORE_PET_BATTLES).put(record);
+  },
+
+  getPetMeta: async (): Promise<PetMeta | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_PET_META)) return null;
+      return new Promise((resolve, reject) => {
+          const request = db.transaction(STORE_PET_META, 'readonly').objectStore(STORE_PET_META).get('main');
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  savePetMeta: async (meta: PetMeta): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_PET_META, 'readwrite');
+      transaction.objectStore(STORE_PET_META).put(meta);
   },
 
   getAllWorldbooks: async (): Promise<Worldbook[]> => {

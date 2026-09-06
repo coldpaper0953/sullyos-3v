@@ -39,6 +39,7 @@ export enum AppID {
   CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
   Contacts = 'contacts', // 通讯录 — 所有可对话角色一览，点选直接切到和 ta 聊天
+  PetPvp = 'pet_pvp', // 宠物对战 — 抽宠物、养成、回合制 PVP（脚本定结果，AI 写战报）
 }
 
 export interface SystemLog {
@@ -4185,6 +4186,58 @@ export interface XhsActivityRecord {
     thinking: string;  // Character's internal monologue / reasoning
     result: 'success' | 'failed' | 'skipped';
     resultMessage?: string;
+}
+
+// ─── 宠物对战（PetPvp App）───
+
+export type PetGrade = 'A' | 'B' | 'C' | 'D' | 'E';
+
+/** 攻速/闪避/暴击三项，随机分配，总和 = petMeta.totalStatPoints（默认 30，可调） */
+export interface PetStats {
+    spd: number;    // 敏捷/攻速：每次攻击后保留回合继续攻击的概率（%），也是先手判定
+    dodge: number;  // 闪避：被攻击时完全闪避的概率（%）
+    crit: number;   // 暴击：攻击造成 1.5 倍伤害的概率（%）
+}
+
+/**
+ * 宠物记录。kind='pet' 是抽到的活宠物；kind='template' 是宠物池模板
+ * （用户在宠物库预建：命名+图片/颜文字/点阵+绑定角色+权重，抽中即以它为原型）。
+ */
+export interface Pet {
+    id: string;
+    kind: 'pet' | 'template';
+    ownerId: string;            // pet: 所属角色；template: 绑定的角色（抽到谁）
+    name: string;
+    grade: PetGrade;
+    stats: PetStats;
+    hp: number;                 // 200 + 品级加成 + rand(0~80)，硬上限 300
+    weight?: number;            // template 专属：池子权重（概率制，永不抽空）
+    imageRef?: string;          // 用户上传图片（blobref/dataURL），优先于颜文字
+    kaomoji?: string;           // 无图时的文字形象（颜文字/点阵图）
+    desc?: string;              // AI 生成的形象描述
+    source?: 'pool' | 'random'; // pet 专属：来自池子命中还是随机生成
+    poolTemplateId?: string;    // 命中的池子模板 id
+    createdAt: number;
+}
+
+/** 一场对战：脚本先算完整个回合流水，AI 只负责一次播报 */
+export interface PetBattleRecord {
+    id: string;
+    aCharId: string; bCharId: string;
+    aName: string; bName: string;      // 宠物名（展示用）
+    aPetId?: string; bPetId?: string;  // 战败方宠物会被删除，所以留可选
+    rounds: string[];                  // 脚本战报流水
+    winnerCharId: string;
+    narration?: string;                // AI 播报（一次调用生成）
+    bet?: { side: 'a' | 'b'; amount: number; odds: number; won: boolean };
+    createdAt: number;
+}
+
+/** 宠物 App 全局单例状态（id='main'）：金币与可调数值 */
+export interface PetMeta {
+    id: string;                 // 'main'
+    gold: number;               // 初始 1000；抽奖 -100；押注/赢平在此循环
+    totalStatPoints: number;    // 攻速/闪避/暴击三项总和（默认 30，可调）
 }
 
 /**

@@ -37,6 +37,7 @@ const SocialApp = lazyApp(() => import('../apps/SocialApp'));
 const StudyApp = lazyApp(() => import('../apps/StudyApp'));
 const FAQApp = lazyApp(() => import('../apps/FAQApp'));
 const GameApp = lazyApp(() => import('../apps/GameApp'));
+const PetPvpApp = lazyApp(() => import('../apps/PetPvpApp'));
 const WorldbookApp = lazyApp(() => import('../apps/WorldbookApp'));
 const NovelApp = lazyApp(() => import('../apps/NovelApp'));
 const BankApp = lazyApp(() => import('../apps/BankApp'));
@@ -970,6 +971,7 @@ const PhoneShell: React.FC = () => {
       case AppID.Study: return <StudyApp />; 
       case AppID.FAQ: return <FAQApp />; 
       case AppID.Game: return <GameApp />; 
+      case AppID.PetPvp: return <PetPvpApp />;
       case AppID.Worldbook: return <WorldbookApp />;
       case AppID.Novel: return <NovelApp />; 
       case AppID.Bank: return <BankApp />;
