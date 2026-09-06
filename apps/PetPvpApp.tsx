@@ -59,9 +59,27 @@ const PetPvpApp: React.FC = () => {
     const [betSide, setBetSide] = useState<'a' | 'b' | null>(null);
     const [betAmount, setBetAmount] = useState(100);
     const [battling, setBattling] = useState(false);
-    // 战斗页面：逐拍回放脚本事件流
+    // 战斗页面：逐拍回放脚本事件流。两阶段：intro（刚匹配上，对峙画面）→ battle（战况推进）
     const [arena, setArena] = useState<null | { a: PetCombatant; b: PetCombatant; events: BattleEvent[]; winner: 'a' | 'b'; record: PetBattleRecord }>(null);
+    const [arenaPhase, setArenaPhase] = useState<'intro' | 'battle'>('intro');
     const [eventIdx, setEventIdx] = useState(0);
+    const logRef = useRef<HTMLDivElement>(null);
+    // 战况日志自动滚到最新
+    useEffect(() => {
+        if (arena && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    }, [eventIdx, arena]);
+    // intro 停留 2.4s → 丝滑过渡到战况推进
+    useEffect(() => {
+        if (!arena || arenaPhase !== 'intro') return;
+        const t = setTimeout(() => setArenaPhase('battle'), 2400);
+        return () => clearTimeout(t);
+    }, [arena, arenaPhase]);
+    useEffect(() => {
+        if (!arena || arenaPhase !== 'battle') return;
+        if (eventIdx >= arena.events.length - 1) return;
+        const t = setTimeout(() => setEventIdx(i => Math.min(i + 1, arena.events.length - 1)), 1200);
+        return () => clearTimeout(t);
+    }, [arena, arenaPhase, eventIdx]);
 
     const charNameOf = (id: string) => characters.find(c => c.id === id)?.name || '未知';
 
@@ -267,7 +285,8 @@ const PetPvpApp: React.FC = () => {
                 setPets(prev => prev.filter(p => p.id !== loserPetId));
             }
             if (bet) addToast(bet.won ? `押中！赢得 ${Math.round(betAmount * bet.odds)} 金币` : `押错了，损失 ${betAmount} 金币`, bet.won ? 'success' : 'error');
-            // 4. 打开战斗页面逐拍回放
+            // 4. 打开战斗页面：先匹配对峙画面，2.4s 后丝滑过渡到战况推进
+            setArenaPhase('intro');
             setEventIdx(0);
             setArena({ a, b, events: result.events, winner: result.winner, record });
         } finally {
@@ -285,70 +304,94 @@ const PetPvpApp: React.FC = () => {
         );
     };
 
-    // ─── 战斗页面（纯脚本逐拍回放：双宠物上台 + HP 条 + 事件文本 + 飘字）───
+    // ─── 战斗页面（两阶段：intro 匹配对峙 → battle 战况推进，全程 CSS 过渡丝滑衔接）───
     const renderArena = () => {
         if (!arena) return null;
+        const intro = arenaPhase === 'intro';
         const ev = arena.events[Math.min(eventIdx, arena.events.length - 1)];
-        const done = eventIdx >= arena.events.length - 1;
+        const done = !intro && eventIdx >= arena.events.length - 1;
         const hpPctA = Math.max(0, Math.round((ev.hpA / Math.max(arena.a.maxHp, 1)) * 100));
         const hpPctB = Math.max(0, Math.round((ev.hpB / Math.max(arena.b.maxHp, 1)) * 100));
-        const hpBar = (pct: number, fromRight: boolean) => (
-            <div className={`h-3 bg-slate-200 rounded-full overflow-hidden ${fromRight ? 'flex justify-end' : ''}`}>
-                <div className={`h-full rounded-full transition-all duration-500 ${pct > 50 ? 'bg-emerald-400' : pct > 20 ? 'bg-amber-400' : 'bg-rose-400'}`}
-                    style={{ width: `${pct}%` }} />
+        const aAttacking = !intro && ev.atkSide === 'a' && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'dodge');
+        const bAttacking = !intro && ev.atkSide === 'b' && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'dodge');
+        const aHurt = !intro && ev.atkSide === 'b' && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'ko');
+        const bHurt = !intro && ev.atkSide === 'a' && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'ko');
+        const sideCard = (c: PetCombatant, isAttacking: boolean, isHurt: boolean, fromLeft: boolean) => (
+            <div className={`flex-1 rounded-2xl border-2 overflow-hidden transition-all duration-700 ${
+                isHurt ? 'border-rose-400 bg-rose-50'
+                    : isAttacking ? 'border-amber-400 bg-amber-50 scale-[1.03] shadow-lg shadow-amber-100'
+                    : 'border-[#7d7264]/30 bg-[#f6f3ec]'
+            } ${intro ? (fromLeft ? 'translate-x-0 opacity-100' : 'translate-x-0 opacity-100') : 'scale-[0.94]'}`}>
+                <div className="px-2 pt-2 pb-1 text-center">
+                    <div className="text-[11px] font-bold text-slate-600 truncate">{c.charName}</div>
+                </div>
+                <div className="flex items-center justify-center py-1 px-2 min-h-[110px]">
+                    {c.imageRef
+                        ? <TokenImg value={c.imageRef} className="w-full h-32 object-cover rounded-lg" />
+                        : <span className="text-[10px] font-mono whitespace-pre text-center leading-tight text-slate-600 break-all">{c.kaomoji || '(=ↀωↀ=)'}</span>}
+                </div>
+                <div className="px-2 pb-2 text-center">
+                    <div className="text-xs font-bold text-slate-700 truncate">{c.name}</div>
+                    <span className={`inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[c.grade]}`}>{c.grade} 级</span>
+                </div>
             </div>
         );
-        const atkVisual = (side: 'a' | 'b', isAttacking: boolean) => {
-            const c = side === 'a' ? arena.a : arena.b;
-            const shaking = isAttacking && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'dodge');
-            const hurt = !isAttacking && (ev.kind === 'attack' || ev.kind === 'crit' || ev.kind === 'ko');
-            return (
-                <div className="flex flex-col items-center gap-1">
-                    <div className={`${shaking ? 'translate-x-2' : ''} ${hurt ? 'animate-pulse opacity-60' : ''} transition-all duration-300`}>
-                        <PetVisual pet={c} size="w-20 h-20" />
-                    </div>
-                    <span className="text-[10px] font-bold text-slate-600">{c.charName}</span>
-                    <span className="text-[9px] text-slate-400">{c.name}</span>
+        const hpBarA = (
+            <div className="flex items-center gap-2 transition-opacity duration-700">
+                <span className="text-xs font-black text-slate-700 w-12 text-right tabular-nums">{ev.hpA}</span>
+                <div className="flex-1 h-4 bg-slate-300/70 rounded-r-full overflow-hidden border border-[#7d7264]/30">
+                    <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-300 transition-all duration-700 ease-out"
+                        style={{ width: `${intro ? 100 : hpPctA}%`, marginLeft: 'auto' }} />
                 </div>
-            );
-        };
+            </div>
+        );
+        const hpBarB = (
+            <div className="flex items-center gap-2 transition-opacity duration-700">
+                <div className="flex-1 h-4 bg-slate-300/70 rounded-l-full overflow-hidden border border-[#7d7264]/30">
+                    <div className="h-full bg-gradient-to-l from-emerald-400 to-emerald-300 transition-all duration-700 ease-out"
+                        style={{ width: `${intro ? 100 : hpPctB}%` }} />
+                </div>
+                <span className="text-xs font-black text-slate-700 w-12 tabular-nums">{ev.hpB}</span>
+            </div>
+        );
         return (
-            <div className="bg-white rounded-2xl p-4 border border-slate-200/70 space-y-3">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                    <span>{arena.a.name}</span>
-                    <span className="text-[10px] text-slate-400">{ev.round > 0 ? `第 ${ev.round} 回合` : '开场'}</span>
-                    <span>{arena.b.name}</span>
-                </div>
-                {/* HP 条 */}
+            <div className="space-y-3">
+                {/* 顶部：对向 HP 条（intro 满血入场 → battle 随战况掉血） */}
                 <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                        <span className="text-[9px] text-slate-400 w-8">A</span>
-                        {hpBar(hpPctA, false)}
-                        <span className="text-[9px] text-slate-500 w-8 text-right">{ev.hpA}</span>
+                    {hpBarA}
+                    <div className={`text-center font-black transition-all duration-700 ${intro ? 'text-2xl text-rose-500 scale-110 tracking-widest' : 'text-[10px] text-slate-400 tracking-[0.3em]'}`}>
+                        {intro ? 'VS' : '⚔ 战况'}
                     </div>
-                    <div className="flex items-center gap-2">
-                        <span className="text-[9px] text-slate-400 w-8">B</span>
-                        {hpBar(hpPctB, false)}
-                        <span className="text-[9px] text-slate-500 w-8 text-right">{ev.hpB}</span>
-                    </div>
+                    {hpBarB}
                 </div>
-                {/* 竞技场 */}
-                <div className="relative bg-gradient-to-b from-sky-50 to-slate-100 rounded-xl p-4 min-h-[110px] flex items-center justify-between overflow-hidden">
-                    {atkVisual('a', ev.atkSide === 'a')}
-                    <div className="text-center">
-                        <div className="text-[10px] font-black text-slate-300">VS</div>
-                        {(ev.kind === 'attack' || ev.kind === 'crit') && ev.dmg != null && (
-                            <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 text-lg font-black animate-fade-in ${ev.kind === 'crit' ? 'text-rose-500' : 'text-slate-600'}`}>
-                                -{ev.dmg}{ev.kind === 'crit' ? '!' : ''}
-                            </div>
-                        )}
-                        {ev.kind === 'dodge' && <div className="absolute top-1/2 left-1/2 -translate-x-1/2 text-sm font-bold text-sky-400 animate-fade-in">闪避!</div>}
+                {/* 中部：双竖版宠物卡（intro 大卡对峙 → battle 缩小进入战况） */}
+                <div className="flex items-stretch gap-2">
+                    {sideCard(arena.a, aAttacking, aHurt, true)}
+                    <div className="flex flex-col items-center justify-center px-1">
+                        <span className={`font-black text-slate-300 transition-all duration-700 ${intro ? 'text-2xl text-rose-400 scale-125' : 'text-sm'}`}>VS</span>
                     </div>
-                    {atkVisual('b', ev.atkSide === 'b')}
+                    {sideCard(arena.b, bAttacking, bHurt, false)}
                 </div>
-                {/* 当前事件文本 */}
-                <div className={`text-center text-xs leading-relaxed rounded-lg py-2 px-3 ${ev.kind === 'crit' ? 'bg-rose-50 text-rose-600 font-bold' : ev.kind === 'win' ? 'bg-amber-50 text-amber-700 font-bold' : 'bg-slate-50 text-slate-600'}`}>
-                    {ev.text}
+                {/* 下方：战况日志面板（intro 隐藏 → battle 滑入展开） */}
+                <div className={`overflow-hidden transition-all duration-700 ease-out ${intro ? 'max-h-0 opacity-0 translate-y-6' : 'max-h-[420px] opacity-100 translate-y-0'}`}>
+                    <div className="rounded-2xl border border-[#7d7264]/30 bg-[#4a4438] p-3">
+                        <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#c9bfae] mb-2 flex items-center justify-between">
+                            <span>⚔ 战况</span>
+                            {!done && <span className="animate-pulse"> LIVE</span>}
+                        </div>
+                        <div ref={logRef} className="space-y-1 max-h-44 overflow-y-auto">
+                            {(() => {
+                                // 已消耗的非连击事件数 = 已对应的战报行数（chain 事件不产生战报行）
+                                const shown = arena.events.slice(0, eventIdx + 1).filter(e => e.kind !== 'chain').length;
+                                const visible = arena.record.rounds.slice(0, Math.max(1, shown));
+                                return visible.map((r, i, arr) => (
+                                    <div key={i} className={`text-[10px] leading-relaxed font-mono ${i === arr.length - 1 ? 'text-amber-200 font-bold' : 'text-[#d8d0c2]'}`}>{r}</div>
+                                ));
+                            })()}
+                        </div>
+                        {!intro && ev.kind === 'crit' && <div className="text-center text-base font-black text-rose-300 animate-fade-in">暴击！-{ev.dmg}</div>}
+                        {!intro && ev.kind === 'dodge' && <div className="text-center text-sm font-bold text-sky-300 animate-fade-in">闪避！</div>}
+                    </div>
                 </div>
                 {/* 控制 */}
                 {done ? (
@@ -360,15 +403,8 @@ const PetPvpApp: React.FC = () => {
                         <button onClick={() => setArena(null)} className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold">关闭战斗页面</button>
                     </div>
                 ) : (
-                    <button onClick={() => setEventIdx(arena.events.length - 1)} className="w-full py-2 rounded-xl bg-slate-100 text-slate-500 text-[10px] font-bold">跳过动画 ▶▶</button>
+                    <button onClick={() => { setArenaPhase('battle'); setEventIdx(arena.events.length - 1); }} className="w-full py-2 rounded-xl bg-slate-100 text-slate-500 text-[10px] font-bold">跳过 ▶▶</button>
                 )}
-                {/* 脚本战报折叠 */}
-                <details className="text-[10px] text-slate-400">
-                    <summary className="cursor-pointer font-bold">脚本战报（{arena.record.rounds.length} 条）</summary>
-                    <div className="mt-1 space-y-0.5 max-h-48 overflow-y-auto">
-                        {arena.record.rounds.map((r, i) => <div key={i} className="font-mono">{r}</div>)}
-                    </div>
-                </details>
             </div>
         );
     };
