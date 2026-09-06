@@ -308,15 +308,23 @@ const PetPvpApp: React.FC = () => {
         return pool.length ? pool[Math.floor(Math.random() * pool.length)] : '';
     };
     const resolveSides = (): [PetCombatant, PetCombatant] | null => {
+        const owners = alivePets.map(p => p.ownerId);
         let aId = sideAChar || 'user';
         let bId = mode === 'rvr' ? pickRandomCharWithPet(aId) : sideBChar;
         if (mode === 'avs' && !bId) bId = pickRandomCharWithPet(aId);
         if (aId === bId) { addToast('两边不能是同一个角色', 'error'); return null; }
-        const a = combatantOf(aId);
-        const b = combatantOf(bId);
-        if (!a) { addToast(`${charNameOf(aId)} 还没有活着的宠物，先去抽奖`, 'error'); return null; }
-        if (!b) { addToast(`${charNameOf(bId)} 还没有活着的宠物，先去抽奖`, 'error'); return null; }
-        return [a, b];
+        // 自动兜底：任一方没有活宠物 → 从有宠物的人里补位（rand 模式/用户没宠物时都能开战）
+        if (!combatantOf(aId)) {
+            const alt = owners.find(id => id !== bId && combatantOf(id));
+            if (!alt) { addToast('没有任何角色有活宠物，先去抽奖', 'error'); return null; }
+            aId = alt;
+        }
+        if (!combatantOf(bId) || bId === aId) {
+            const alt = owners.find(id => id !== aId && combatantOf(id));
+            if (!alt) { addToast('没有第二个有宠物的角色，先去抽奖', 'error'); return null; }
+            bId = alt;
+        }
+        return [combatantOf(aId), combatantOf(bId)];
     };
 
     // 战报记忆压缩：把上一场（及所有未压缩的）战报压成一句话记忆，追加进双方角色的记忆
