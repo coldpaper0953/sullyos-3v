@@ -2367,8 +2367,13 @@ export const DB = {
 
   savePet: async (pet: Pet): Promise<void> => {
       const db = await openDB();
-      const transaction = db.transaction(STORE_PETS, 'readwrite');
-      transaction.objectStore(STORE_PETS).put(pet);
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PETS, 'readwrite');
+          transaction.objectStore(STORE_PETS).put(pet);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+      });
   },
 
   deletePet: async (id: string): Promise<void> => {
@@ -2390,8 +2395,13 @@ export const DB = {
 
   savePetBattle: async (record: PetBattleRecord): Promise<void> => {
       const db = await openDB();
-      const transaction = db.transaction(STORE_PET_BATTLES, 'readwrite');
-      transaction.objectStore(STORE_PET_BATTLES).put(record);
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PET_BATTLES, 'readwrite');
+          transaction.objectStore(STORE_PET_BATTLES).put(record);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+      });
   },
 
   getPetMeta: async (): Promise<PetMeta | null> => {
@@ -2406,8 +2416,13 @@ export const DB = {
 
   savePetMeta: async (meta: PetMeta): Promise<void> => {
       const db = await openDB();
-      const transaction = db.transaction(STORE_PET_META, 'readwrite');
-      transaction.objectStore(STORE_PET_META).put(meta);
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PET_META, 'readwrite');
+          transaction.objectStore(STORE_PET_META).put(meta);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+      });
   },
 
   getAllWorldbooks: async (): Promise<Worldbook[]> => {
