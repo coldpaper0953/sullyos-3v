@@ -2,13 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Pet, PetGrade, PetStats, PetBattleRecord, PetMeta, CharacterProfile } from '../types';
-import { safeFetchJson } from '../utils/safeApi';
 import {
-    PET_GRADE_BONUS, GRADE_WEIGHTS,
-    rollGrade, rollStats, rollHp, rollPool,
+    rollGrade, rollStats, rollAtk, rollHpByGrade, rollPool,
     buildCombatant, simulateBattle, estimateOdds, PetCombatant, BattleEvent,
 } from '../utils/petEngine';
-import { putImageBlob, migrateDataUrlToRef, isImageValue, isBlobRef } from '../utils/blobRef';
+import { migrateDataUrlToRef } from '../utils/blobRef';
 import { processImage } from '../utils/file';
 import TokenImg from '../components/os/TokenImg';
 import Modal from '../components/os/Modal';
@@ -42,7 +40,16 @@ const PetPvpApp: React.FC = () => {
     const [gachaCharId, setGachaCharId] = useState<string>('user');
     const [rolling, setRolling] = useState(false);
     const [lastRolled, setLastRolled] = useState<Pet | null>(null);
-    const [lastResult, setLastResult] = useState<{ grade: PetGrade; stats: PetStats; hp: number; source: 'pool' | 'random' } | null>(null);
+    const [lastResult, setLastResult] = useState<{ grade: PetGrade; stats: PetStats; hp: number; atk: number; source: 'pool' | 'random' } | null>(null);
+    // 抽卡场景：dig（点阵猫翻箱）→ reveal（结果卡掉落 + 介绍卡）
+    const [drawScene, setDrawScene] = useState<null | { phase: 'dig' | 'reveal'; pet: Pet }>(null);
+    const [digFrame, setDigFrame] = useState(0);
+    useEffect(() => {
+        if (!drawScene || drawScene.phase !== 'dig') return;
+        const iv = setInterval(() => setDigFrame(f => (f + 1) % 2), 260);
+        const t = setTimeout(() => setDrawScene(s => (s ? { ...s, phase: 'reveal' } : s)), 2000);
+        return () => { clearInterval(iv); clearTimeout(t); };
+    }, [drawScene]);
 
     // 宠物库（池子模板）编辑状态
     const [tplName, setTplName] = useState('');
@@ -115,80 +122,53 @@ const PetPvpApp: React.FC = () => {
     const aliveByChar = (charId: string) => alivePets.filter(p => p.ownerId === charId);
     const petOf = (id?: string) => pets.find(p => p.id === id);
 
-    // ─── 抽奖 ───
+    // ─── 抽奖（纯脚本，零 AI：点抽签 → 开箱动画 → 结果卡掉落）───
     const doGacha = async () => {
         const charId = gachaCharId || 'user';
-        const isUser = charId === 'user';
         if (meta.gold < GACHA_COST) { addToast(`金币不足（抽奖需 ${GACHA_COST}），去对战赢金币吧`, 'error'); return; }
-        setRolling(true);
-        try {
-            await saveMeta({ ...meta, gold: meta.gold - GACHA_COST });
-            // 1. 脚本掷：品级 / 属性 / 血量 / 池子（池子是全局的，不分角色）
-            const grade = rollGrade();
-            const stats = rollStats(meta.totalStatPoints);
-            const hp = rollHp(grade);
-            const hitTpl = rollPool(templates, BATTLE_MISS_WEIGHT);
-            // 2. 调一次 API 生成名字与描述（user 抽 = 用户本人口吻；角色抽 = 角色人设口吻；副 API 优先，未配置回落主模型）
-            const llm = memoryPalaceConfig?.lightLLM?.baseUrl ? memoryPalaceConfig.lightLLM : null;
-            const useCfg = (llm && llm.baseUrl && llm.apiKey) ? llm : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model };
-            let name = '';
-            let desc = '';
-            try {
-                const persona = isUser
-                    ? `你是用户本人（${userProfile.name || '我'}）。`
-                    : (characters.find(c => c.id === charId)?.systemPrompt || '').slice(0, 1500);
-                const poolHint = hitTpl ? `这次抽中的是用户预置的宠物模板「${hitTpl.name}」，请沿用这个名字。` : '请为宠物起一个简短有趣的名字（2~6 个字）。';
-                const data = await safeFetchJson(
-                    `${useCfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${useCfg.apiKey}` },
-                        body: JSON.stringify({
-                            model: useCfg.model,
-                            messages: [
-                                { role: 'system', content: `${persona}\n\n你是宠物抽奖系统的解签员。品级 ${grade}（攻击加成 +${PET_GRADE_BONUS[grade]}），属性：敏捷 ${stats.spd}/闪避 ${stats.dodge}/暴击 ${stats.crit}（总 ${meta.totalStatPoints}），血量 ${hp}。${poolHint}\n按你的口吻输出两行：第一行只有宠物名字；第二行是不超过 40 字的形象描述。` },
-                                { role: 'user', content: '开抽！' },
-                            ],
-                            temperature: 0.9, max_tokens: 300, stream: false,
-                        }),
-                    },
-                    1, 60_000, { appName: '宠物对战', purpose: '抽卡生成' },
-                );
-                const data2 = await data;
-                const text = (data2.choices?.[0]?.message?.content || '').trim();
-                const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean);
-                name = (lines[0] || '').replace(/^["'「」]|["'「」]$/g, '').slice(0, 12);
-                desc = (lines[1] || '').slice(0, 60);
-            } catch { /* API 失败 → 本地兜底名 */ }
-            if (!name) {
-                const fallbacks = ['咕咕兽', '毛毛球', '闪光鼠', '硬壳龟', '电电犬', '云朵鲸'];
-                name = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-                desc = '神秘宠物（AI 没接住，纯脚本生成）';
-            }
-            // 3. 落库（覆盖该角色当前活宠物 = 重新生成的语义）
-            const old = aliveByChar(charId);
-            for (const o of old) await DB.deletePet(o.id);
-            const pet: Pet = {
-                id: `pet-${Date.now()}`,
-                kind: 'pet',
-                ownerId: charId,
-                name,
-                grade, stats, hp,
-                desc,
-                source: hitTpl ? 'pool' : 'random',
-                poolTemplateId: hitTpl?.id,
-                imageRef: hitTpl?.imageRef,
-                kaomoji: hitTpl?.kaomoji,
-                createdAt: Date.now(),
-            };
-            await DB.savePet(pet);
-            setPets(prev => [...prev.filter(p => p.id !== pet.id), pet]);
-            setLastRolled(pet);
-            setLastResult({ grade, stats, hp, source: pet.source! });
-            addToast(`抽到了「${name}」（${grade} 级）！`, 'success');
-        } finally {
-            setRolling(false);
-        }
+        // 1. 脚本掷：品级 / 攻击 / 属性 / 血量 / 池子（池子是全局的，不分角色）
+        const grade = rollGrade();
+        const atk = rollAtk(grade);
+        const stats = rollStats(meta.totalStatPoints);
+        const hp = rollHpByGrade(grade);
+        const hitTpl = rollPool(templates, BATTLE_MISS_WEIGHT);
+        // 2. 本地词库起名 + 按品级/最高属性生成描述
+        const NAME_PREFIX = ['闪电', '月光', '暴走', '铁壳', '云朵', '暗影', '元气', '咕咕', '星尘', '荧光', '蹦跳', '贪睡'];
+        const NAME_SUFFIX = ['兽', '喵', '犬', '鼠', '鲸', '龟', '狐', '鸟', '球', '蜥'];
+        const GRADE_FLAVOR: Record<PetGrade, string> = { A: '传说级品质', B: '相当能打', C: '中规中矩', D: '勉强能用', E: '纯图一乐' };
+        const typeOf = (s: PetStats) => {
+            const top = Math.max(s.spd, s.dodge, s.crit);
+            if (top === s.spd) return '敏捷型';
+            if (top === s.dodge) return '闪避流';
+            return '暴击流';
+        };
+        const name = hitTpl ? hitTpl.name : `${NAME_PREFIX[Math.floor(Math.random() * NAME_PREFIX.length)]}${NAME_SUFFIX[Math.floor(Math.random() * NAME_SUFFIX.length)]}`;
+        const desc = `${GRADE_FLAVOR[grade]} · ${typeOf(stats)}${hitTpl ? '（池子命中）' : ''}`;
+        // 3. 扣金币 + 覆盖该角色当前活宠物
+        await saveMeta({ ...meta, gold: meta.gold - GACHA_COST });
+        const old = aliveByChar(charId);
+        for (const o of old) await DB.deletePet(o.id);
+        const pet: Pet = {
+            id: `pet-${Date.now()}`,
+            kind: 'pet',
+            ownerId: charId,
+            name,
+            grade,
+            atk,
+            stats, hp,
+            desc,
+            source: hitTpl ? 'pool' : 'random',
+            poolTemplateId: hitTpl?.id,
+            imageRef: hitTpl?.imageRef,
+            kaomoji: hitTpl?.kaomoji,
+            createdAt: Date.now(),
+        };
+        await DB.savePet(pet);
+        setPets(prev => [...prev.filter(p => p.id !== pet.id), pet]);
+        setLastRolled(pet);
+        setLastResult({ grade, stats, hp, atk, source: pet.source! });
+        // 4. 开箱动画场景（点阵猫翻找 2s → 结果卡掉落）
+        setDrawScene({ phase: 'dig', pet });
     };
 
     // ─── 宠物库：池子模板 ───
@@ -208,6 +188,7 @@ const PetPvpApp: React.FC = () => {
             ownerId: 'pool', // 模板不绑定角色：谁抽到归谁
             name: tplName.trim(),
             grade: 'C', // 模板不预设品级，抽到时重掷
+            atk: 0, // 模板不预设攻击，抽到时按品级重掷
             stats: { spd: 10, dodge: 10, crit: 10 },
             hp: 200,
             weight: Math.max(1, tplWeight),
@@ -337,7 +318,7 @@ const PetPvpApp: React.FC = () => {
                 </div>
                 <div className="px-2 pb-2 text-center">
                     <div className="text-xs font-bold text-slate-700 truncate">{c.name}</div>
-                    <span className={`inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[c.grade]}`}>{c.grade} 级</span>
+                    <span className={`inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[c.grade]}`}>{c.grade} 级 · 攻 {c.atk}</span>
                 </div>
             </div>
         );
@@ -384,14 +365,21 @@ const PetPvpApp: React.FC = () => {
                             <span>⚔ 战况</span>
                             {!done && <span className="animate-pulse"> LIVE</span>}
                         </div>
-                        <div ref={logRef} className="space-y-1 max-h-44 overflow-y-auto">
+                        <div ref={logRef} className="space-y-1.5 max-h-44 overflow-y-auto">
                             {(() => {
                                 // 已消耗的非连击事件数 = 已对应的战报行数（chain 事件不产生战报行）
                                 const shown = arena.events.slice(0, eventIdx + 1).filter(e => e.kind !== 'chain').length;
                                 const visible = arena.record.rounds.slice(0, Math.max(1, shown));
-                                return visible.map((r, i, arr) => (
-                                    <div key={i} className={`text-[10px] leading-relaxed font-mono ${i === arr.length - 1 ? 'text-amber-200 font-bold' : 'text-[#d8d0c2]'}`}>{r}</div>
-                                ));
+                                return visible.map((r, i, arr) => {
+                                    // 「第N回合：」小字前缀，正文大字居中
+                                    const m = r.match(/^(第\d+回合：)?(.*)$/);
+                                    return (
+                                        <div key={i} className={`text-center leading-relaxed font-mono ${i === arr.length - 1 ? 'text-amber-200 font-bold' : 'text-[#d8d0c2]'}`}>
+                                            {m && m[1] ? <span className="text-[9px] opacity-60 mr-1.5">{m[1]}</span> : null}
+                                            <span className="text-xs">{m ? m[2] : r}</span>
+                                        </div>
+                                    );
+                                });
                             })()}
                         </div>
                         {!intro && ev.kind === 'crit' && <div className="text-center text-base font-black text-rose-300 animate-fade-in">暴击！-{ev.dmg}</div>}
@@ -420,6 +408,55 @@ const PetPvpApp: React.FC = () => {
 
     return (
         <div className="h-full w-full flex flex-col bg-slate-50 font-sans relative overflow-hidden">
+            {/* 抽卡场景：点阵数码猫开箱（dig）→ 结果卡掉落 + 介绍卡（reveal）。纯 CSS + 点阵字符 */}
+            {drawScene && drawScene.pet && (
+                <div className="fixed inset-0 z-[200] bg-[#0b0b12] flex flex-col items-center justify-center overflow-hidden">
+                    <style>{`@keyframes boxShake { 0%,100% { transform: rotate(0deg) } 25% { transform: rotate(-2.5deg) } 75% { transform: rotate(2.5deg) } }
+@keyframes boxOpen { 0% { transform: rotate(0deg) scale(1) } 50% { transform: rotate(-8deg) scale(1.06) } 100% { transform: rotate(8deg) scale(1.1) } }`}</style>
+                    {drawScene.phase !== 'reveal' ? (
+                        // 翻找阶段：点阵猫在箱子里两帧轮换 + 箱子晃动
+                        <div className="flex flex-col items-center gap-4">
+                            <div className="border-2 border-[#8a7350] rounded-lg bg-[#111118] px-6 py-4"
+                                style={{ animation: 'boxShake 400ms ease-in-out infinite' }}>
+                                <pre className="text-[#e8e0d0] text-xl leading-tight font-mono whitespace-pre text-center">
+                                    {digFrame === 0
+                                        ? '⠀⠀⠀⠀⢀⣴⠟⠙⠷⠤⠴⠟⠉⢻⣤⡀\n⠀⠀⠀⣴⠋⠁⢀⣀⡀⠀⠀⣀⡀⠀⠈⠻⣦\n⠀⠀⢸⡇⠀⠀⢿⣿⠗⣀⡸⣿⡿⠀⠀⠀⣹\n⠀⠀⠸⣧⠀⠀⠀⠀⠈⠉⠁⠀⠀⠀⠀⣠⡟\n⠀⠀⠀⠈⠙⠶⢤⣤⣤⣤⣤⣤⡤⠶⠟⠋'
+                                        : '⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣿\n⠀⠀⠀⢠⣴⣿⣿⣿⣿⣿⣿⣿⣦⡀\n⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿\n⠀⠀⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃\n⣴⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣦\n⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠃'}
+                                </pre>
+                            </div>
+                            <div className="text-[11px] text-slate-500 tracking-[0.3em] animate-pulse">翻 找 中 …</div>
+                            <button onClick={() => setDrawScene(s => (s ? { ...s, phase: 'reveal' } : s))}
+                                className="text-[10px] text-slate-600 hover:text-slate-400 px-3 py-1">跳过 ▶▶</button>
+                        </div>
+                    ) : (
+                        // 揭晓阶段：结果卡从上方掉落 + 介绍卡弹出
+                        <div className="flex flex-col items-center gap-4 w-full px-6">
+                            <div className="flex flex-col items-center gap-2" style={{ animation: 'petDrop 800ms cubic-bezier(.2,.9,.3,1.2) both' }}>
+                                <PetVisual pet={drawScene.pet} size="w-24 h-24" />
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xl font-bold text-white">{drawScene.pet.name}</span>
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[drawScene.pet.grade]}`}>{drawScene.pet.grade} 级 · 攻击 {drawScene.pet.atk}</span>
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-4 w-full max-w-sm animate-fade-in">
+                                <div className="grid grid-cols-5 gap-1.5 text-center">
+                                    {[['❤', drawScene.pet.hp], ['⚔', drawScene.pet.atk], ['💨', drawScene.pet.stats.spd], ['🌀', drawScene.pet.stats.dodge], ['💥', drawScene.pet.stats.crit]].map(([label, v]) => (
+                                        <div key={label as string} className="bg-slate-50 rounded-lg py-2">
+                                            <div className="text-[10px] text-slate-400">{label}</div>
+                                            <div className="text-sm font-bold text-slate-700">{v}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-3 text-center">{drawScene.pet.desc}</p>
+                                <p className="text-[9px] text-slate-400 mt-1 text-center">归属：{charNameOf(drawScene.pet.ownerId)} · {drawScene.pet.source === 'pool' ? '宠物池命中' : '随机生成'}</p>
+                                <button onClick={() => setDrawScene(null)}
+                                    className="w-full mt-3 py-2.5 rounded-xl bg-fuchsia-500 text-white text-sm font-bold active:scale-[0.98]">确定</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* 顶栏 */}
             <div className="shrink-0 z-10 sticky top-0 bg-white/80 backdrop-blur-md border-b border-slate-200/60" style={{ paddingTop: 'var(--safe-top)' }}>
                 <div className="pt-12 pb-3 px-4 flex items-center justify-between">
@@ -464,13 +501,13 @@ const PetPvpApp: React.FC = () => {
                                     <div className="flex-1">
                                         <div className="flex items-center gap-2">
                                             <span className="font-bold text-slate-800">{lastRolled.name}</span>
-                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[lastResult.grade]}`}>{lastResult.grade} 级 · 攻击+{PET_GRADE_BONUS[lastResult.grade]}</span>
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${GRADE_COLORS[lastResult.grade]}`}>{lastResult.grade} 级 · 攻击 {lastRolled.atk}</span>
                                         </div>
                                         <p className="text-[11px] text-slate-500 mt-1">{lastRolled.desc || '…'}</p>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-4 gap-2 mt-3 text-center">
-                                    {[['❤ 血量', lastResult.hp], ['💨 敏捷', lastResult.stats.spd], ['🌀 闪避', lastResult.stats.dodge], ['💥 暴击', lastResult.stats.crit]].map(([label, v]) => (
+                                <div className="grid grid-cols-5 gap-1.5 mt-3 text-center">
+                                    {[['❤ 血量', lastResult.hp], ['⚔ 攻击', lastResult.atk], ['💨 敏捷', lastResult.stats.spd], ['🌀 闪避', lastResult.stats.dodge], ['💥 暴击', lastResult.stats.crit]].map(([label, v]) => (
                                         <div key={label as string} className="bg-slate-50 rounded-lg py-2">
                                             <div className="text-[9px] text-slate-400">{label}</div>
                                             <div className="text-sm font-bold text-slate-700">{v}</div>

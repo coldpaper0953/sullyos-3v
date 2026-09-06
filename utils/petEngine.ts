@@ -16,11 +16,20 @@
 
 import { Pet, PetGrade, PetStats } from '../types';
 
-export const PET_GRADE_BONUS: Record<PetGrade, number> = { A: 20, B: 15, C: 10, D: 5, E: 0 };
+/** 品级 → 数值区间：攻击总区间 0~150，血量总区间 0~300，按品级分段随机 */
+export const GRADE_RANGES: Record<PetGrade, { atk: [number, number]; hp: [number, number] }> = {
+    A: { atk: [120, 150], hp: [225, 300] },
+    B: { atk: [90, 120], hp: [170, 250] },
+    C: { atk: [60, 90], hp: [110, 180] },
+    D: { atk: [30, 60], hp: [60, 120] },
+    E: { atk: [0, 30], hp: [20, 70] },
+};
 /** 品级权重（A 最稀有）。总和 100，随机数落区间判定。 */
 export const GRADE_WEIGHTS: Array<{ grade: PetGrade; w: number }> = [
     { grade: 'A', w: 6 }, { grade: 'B', w: 12 }, { grade: 'C', w: 22 }, { grade: 'D', w: 30 }, { grade: 'E', w: 30 },
 ];
+
+const randInt = (lo: number, hi: number) => lo + Math.floor(Math.random() * (hi - lo + 1));
 
 export interface PetCombatant {
     charId: string;
@@ -28,7 +37,7 @@ export interface PetCombatant {
     petId?: string;
     name: string;
     grade: PetGrade;
-    atk: number;        // 10 + 品级加成
+    atk: number;        // 攻击：品级区间随机值（0~150）
     spd: number;
     dodge: number;
     crit: number;
@@ -51,7 +60,7 @@ export function rollGrade(): PetGrade {
     return 'E';
 }
 
-/** 三项属性随机分配，总和 = totalStatPoints（每次都按均匀随机切两刀） */
+/** 敏捷/闪避/暴击 三项随机分配，总和 = totalStatPoints（切两刀均匀随机） */
 export function rollStats(totalStatPoints: number): PetStats {
     const cut1 = Math.random() * totalStatPoints;
     const cut2 = Math.random() * totalStatPoints;
@@ -63,8 +72,16 @@ export function rollStats(totalStatPoints: number): PetStats {
     return { spd, dodge, crit };
 }
 
-export function rollHp(grade: PetGrade): number {
-    return Math.min(300, 200 + PET_GRADE_BONUS[grade] + Math.floor(Math.random() * 81));
+/** 攻击：按品级区间随机（总区间 0~150） */
+export function rollAtk(grade: PetGrade): number {
+    const [lo, hi] = GRADE_RANGES[grade].atk;
+    return randInt(lo, hi);
+}
+
+/** 血量：按品级区间随机（总区间 0~300） */
+export function rollHpByGrade(grade: PetGrade): number {
+    const [lo, hi] = GRADE_RANGES[grade].hp;
+    return randInt(lo, hi);
 }
 
 /** 池子判定：按权重抽一个模板；未命中（随机生成线）返回 null。missWeight 是"池子全空"的虚拟权重。 */
@@ -91,13 +108,12 @@ export function buildCombatant(
     charName: string,
     totalStatPoints: number,
 ): PetCombatant {
-    const bonus = PET_GRADE_BONUS[pet.grade];
     return {
         charId, charName,
         petId: pet.id,
         name: pet.name,
         grade: pet.grade,
-        atk: 10 + bonus,
+        atk: pet.atk ?? 30,
         spd: pet.stats.spd, dodge: pet.stats.dodge, crit: pet.stats.crit,
         hp: pet.hp, maxHp: pet.hp,
         imageRef: pet.imageRef,

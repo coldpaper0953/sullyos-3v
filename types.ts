@@ -4206,15 +4206,16 @@ export interface PetStats {
 export interface Pet {
     id: string;
     kind: 'pet' | 'template';
-    ownerId: string;            // pet: 所属角色；template: 绑定的角色（抽到谁）
+    ownerId: string;            // pet: 所属角色（'user' = 玩家本人）；template: 'pool'（不绑定角色）
     name: string;
     grade: PetGrade;
+    atk: number;                // 攻击：按品级区间随机（总区间 0~150）
     stats: PetStats;
-    hp: number;                 // 200 + 品级加成 + rand(0~80)，硬上限 300
+    hp: number;                 // 按品级区间随机（总区间 0~300）
     weight?: number;            // template 专属：池子权重（概率制，永不抽空）
     imageRef?: string;          // 用户上传图片（blobref/dataURL），优先于颜文字
     kaomoji?: string;           // 无图时的文字形象（颜文字/点阵图）
-    desc?: string;              // AI 生成的形象描述
+    desc?: string;              // 脚本生成的形象描述
     source?: 'pool' | 'random'; // pet 专属：来自池子命中还是随机生成
     poolTemplateId?: string;    // 命中的池子模板 id
     createdAt: number;
