@@ -2382,6 +2382,25 @@ export const DB = {
       transaction.objectStore(STORE_PETS).delete(id);
   },
 
+  // 重置宠物对战用：删光所有人的宠物，但保留宠物池模板（kind === 'template'）
+  clearAllPets: async (keepTemplates = true): Promise<void> => {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_PETS, 'readwrite');
+          const store = transaction.objectStore(STORE_PETS);
+          const request = store.getAll();
+          request.onsuccess = () => {
+              for (const pet of (request.result || []) as Pet[]) {
+                  if (keepTemplates && pet.kind === 'template') continue;
+                  store.delete(pet.id);
+              }
+          };
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+      });
+  },
+
   getAllPetBattles: async (): Promise<PetBattleRecord[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_PET_BATTLES)) return [];

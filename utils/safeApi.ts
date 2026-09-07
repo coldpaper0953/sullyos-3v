@@ -20,6 +20,33 @@ export function isChatCompletionUrl(url: string): boolean {
     return url.includes('/chat/completions');
 }
 
+/** 当前页面是不是本地跑的（dev 5173 / 本地静态 4173）——本地才有 /api/llm/proxy 转发可走 */
+function isLocalOrigin(): boolean {
+    try {
+        return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(location.hostname);
+    } catch { return false; }
+}
+
+/** 从绝对 URL 里拆出 (baseUrl, path)：只认已知的 OpenAI 兼容后缀，认不出就不转发 */
+const API_PATH_RE = /\/(chat\/completions|completions|models|embeddings|responses)$/;
+function splitApiUrl(urlStr: string): { baseUrl: string; path: string } | null {
+    const m = urlStr.match(API_PATH_RE);
+    if (!m) return null;
+    return { baseUrl: urlStr.slice(0, urlStr.length - m[0].length), path: m[0] };
+}
+
+/** 从 RequestInit.headers（对象或 Headers 实例）里读 Authorization 并剥掉 Bearer 前缀 */
+function extractApiKey(headers: unknown): string {
+    let auth: unknown;
+    if (headers && typeof (headers as Headers).get === 'function') {
+        auth = (headers as Headers).get('Authorization');
+    } else if (headers && typeof headers === 'object') {
+        const h = headers as Record<string, unknown>;
+        auth = h.Authorization ?? h.authorization;
+    }
+    return typeof auth === 'string' ? auth.replace(/^Bearer\s+/i, '') : '';
+}
+
 /**
  * 「停止生成」用的环境中止信号。
  *
@@ -398,9 +425,53 @@ export async function safeFetchJson(
     // 各处构造请求的地方就不用各记一遍这件事了（详见 utils/apiBlobRefs.ts）。
     // 循环外做一次：重试用的是同一份 body。
     const resolvedBody = await resolveBlobRefsInRequestBody(metaOptions.body);
-    const sendOptions: RequestInit = resolvedBody === metaOptions.body
+    let sendOptions: RequestInit = resolvedBody === metaOptions.body
         ? metaOptions
         : { ...metaOptions, body: resolvedBody as BodyInit };
+
+    // ── CC/酒馆同款请求头：对已知 OpenAI 兼容端点，调用方没给 Content-Type 的
+    // 统一补上（给了的不动，不改任何现有行为）──
+    const targetUrl = String(url);
+    const isApiEndpoint = /^https?:\/\//i.test(targetUrl) && API_PATH_RE.test(targetUrl);
+    if (isApiEndpoint) {
+        const merged: Record<string, string> = {};
+        const rawHeaders = sendOptions.headers;
+        if (rawHeaders && typeof (rawHeaders as Headers).forEach === 'function') {
+            (rawHeaders as Headers).forEach((v, k) => { merged[k.toLowerCase()] = v; });
+        } else if (rawHeaders && typeof rawHeaders === 'object') {
+            for (const [k, v] of Object.entries(rawHeaders as Record<string, unknown>)) {
+                if (typeof v === 'string') merged[k.toLowerCase()] = v;
+            }
+        }
+        // Authorization 没给的补一个空 Bearer 占位（部分中转站要求头必须在场才认 CUSTOM 源）
+        if (!merged['authorization']) merged['authorization'] = 'Bearer ';
+        if (!merged['content-type'] && sendOptions.body != null) merged['content-type'] = 'application/json';
+        sendOptions = { ...sendOptions, headers: merged };
+    }
+
+    // ── 三分支路由（本地页面 → /api/llm/proxy 转发；直连标记/外部源 → 原样）──
+    // 酒馆能走 http:// 的原理 = Node 服务端发请求没有混合内容限制；本地服务统一
+    // 补 Content-Type + Bearer，转发信封里带原上游地址和 key，上游头由它重建。
+    let fetchUrl = url;
+    if (isApiEndpoint && isLocalOrigin() && String(sendOptions.method || 'GET').toUpperCase() === 'POST') {
+        let direct = false;
+        try { direct = localStorage.getItem('__sullyDirect__') === '1'; } catch { /* ignore */ }
+        if (!direct) {
+            try {
+                const split = splitApiUrl(targetUrl);
+                if (split) {
+                    const apiKey = extractApiKey(sendOptions.headers);
+                    const payload = typeof sendOptions.body === 'string' ? JSON.parse(sendOptions.body) : sendOptions.body;
+                    sendOptions = {
+                        ...sendOptions,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ baseUrl: split.baseUrl, apiKey, payload, path: split.path }),
+                    };
+                    fetchUrl = '/api/llm/proxy';
+                }
+            } catch { /* 解析失败 → 原样直连 */ }
+        }
+    }
 
     // 调用方自己给了 signal 就用它；聊天生成类请求没给的话用本轮的「停止生成」信号。
     const externalSignal: AbortSignal | undefined = options.signal
@@ -431,7 +502,7 @@ export async function safeFetchJson(
         }
         const attemptStartedAt = Date.now();
         try {
-            const response = await fetch(url, attemptOptions);
+            const response = await fetch(fetchUrl, attemptOptions);
             if (timeoutHandle) clearTimeout(timeoutHandle);
             lastStatus = response.status;
             const headersMs = Date.now() - attemptStartedAt;

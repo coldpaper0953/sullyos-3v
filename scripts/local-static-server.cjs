@@ -61,8 +61,96 @@ function sendFile(filePath, res) {
   });
 }
 
+// LLM 转发（模仿 SillyTavern CUSTOM 源）：手机/PC 本地页面通过本地 Node 服务转发
+// API 请求，支持 http:// 上游与 SSE 流（浏览器直接发会被混合内容限制拦）。
+// 与 server/llm-proxy-middleware.ts 同款协议：POST {baseUrl, apiKey, payload, path}。
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+}
+
+async function handleLlmProxy(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
+  if (req.method !== 'POST') {
+    res.statusCode = 405;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+    return;
+  }
+  let upstreamUrl = '';
+  try {
+    const body = await readJsonBody(req);
+    const { baseUrl, apiKey, payload, path: apiPath } = body;
+    if (!baseUrl) throw new Error('Missing baseUrl');
+    if (!payload) throw new Error('Missing payload');
+    const base = String(baseUrl).trim().replace(/\/+$/, '');
+    const p = String(apiPath || '/chat/completions');
+    upstreamUrl = p.startsWith('/') ? base + p : base + '/' + p;
+    if (!/^https?:\/\//i.test(upstreamUrl)) throw new Error('baseUrl must be http(s)');
+
+    // 信封 method:'GET'（拉模型列表）→ GET 无 body；否则 POST + payload
+    const httpMethod = String(body.method || payload.method || 'POST').toUpperCase();
+    const isGet = httpMethod === 'GET';
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: isGet ? 'application/json' : (payload.stream ? 'text/event-stream' : 'application/json'),
+    };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const extra = (payload.headers && typeof payload.headers === 'object') ? payload.headers : {};
+    for (const [k, v] of Object.entries(extra)) {
+      if (typeof v === 'string' && k.toLowerCase() !== 'content-type' && k.toLowerCase() !== 'authorization') headers[k] = v;
+    }
+    const upstreamPayload = { ...payload };
+    delete upstreamPayload.method;
+    delete upstreamPayload.headers;
+
+    console.log(`[llm-proxy] ${httpMethod} ${upstreamUrl}`);
+    const upstream = await fetch(upstreamUrl, {
+      method: httpMethod,
+      headers,
+      ...(isGet ? {} : { body: JSON.stringify(upstreamPayload) }),
+    });
+    res.statusCode = upstream.status;
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json');
+    if (upstream.body && typeof upstream.body.getReader === 'function') {
+      const reader = upstream.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+      console.log(`[llm-proxy] ${upstream.status} <- ${upstreamUrl} (piped)`);
+      return;
+    }
+    res.end(await upstream.text());
+    console.log(`[llm-proxy] ${upstream.status} <- ${upstreamUrl}`);
+  } catch (err) {
+    console.error('[llm-proxy] error:', err && err.message, upstreamUrl || '');
+    res.statusCode = 502;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: (err && err.message) || 'llm-proxy failed' }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+
+  // API 分支：LLM 转发优先于静态文件
+  if (urlPath === '/api/llm/proxy') {
+    handleLlmProxy(req, res).catch(() => {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: 'llm-proxy crashed' }));
+      }
+    });
+    return;
+  }
+
   const requestedPath = resolvePath(urlPath);
 
   if (!requestedPath) {

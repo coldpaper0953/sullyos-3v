@@ -1277,10 +1277,22 @@ const Settings: React.FC = () => {
     setIsLoadingModels(true);
     setStatusMsg('正在连接...');
     try {
-        const response = await fetch(`${baseUrl}/models`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
-        });
+        // 本地页面（localhost/127.0.0.1）走 /api/llm/proxy 转发（模仿酒馆：Node 服务端
+        // 发请求，http 上游与跨源站都能拉）；非本地（GitHub Pages 等）直连，行为照旧。
+        const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(location.hostname);
+        let response: Response;
+        if (isLocal && /^https?:\/\//i.test(baseUrl)) {
+            response = await fetch('/api/llm/proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ baseUrl, apiKey, method: 'GET', payload: {}, path: '/models' }),
+            });
+        } else {
+            response = await fetch(`${baseUrl}/models`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+            });
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await safeResponseJson(response);
         // Support common OpenAI-compatible and nested gateway response formats.
@@ -1299,6 +1311,53 @@ const Settings: React.FC = () => {
         setStatusMsg(`连接失败${error?.message ? `：${error.message}` : ''}`);
     } finally {
         setIsLoadingModels(false);
+    }
+  };
+
+  // 编辑预设弹窗里拉模型：用弹窗里现填的 URL/Key 拉 {url}/models，选完回填 Model。
+  // 与上面主表单的 fetchModels 同一套解析（extractModelIds），但不动主表单的缓存
+  // （writeModelsForOrigin/saveModels 只认主表单当前源），选择弹窗复用同一个。
+  const [editPresetModels, setEditPresetModels] = useState<string[]>([]);
+  const [editPresetFetching, setEditPresetFetching] = useState(false);
+  const fetchEditPresetModels = async () => {
+    const baseUrl = normalizeApiBaseUrl(editPresetUrl);
+    const apiKey = normalizeApiCredential(editPresetKey);
+    if (!baseUrl) { addToast('请先在弹窗里填写 URL', 'error'); return; }
+    setEditPresetFetching(true);
+    try {
+        // 本地页面（localhost/127.0.0.1）走 /api/llm/proxy 转发，http 上游也能拉
+        // （信封 method:'GET' → 本地服务 GET 转发、无 body）
+        const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(location.hostname);
+        let response: Response;
+        if (isLocal && /^https?:\/\//i.test(baseUrl)) {
+            response = await fetch('/api/llm/proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ baseUrl, apiKey, method: 'GET', payload: {}, path: '/models' }),
+            });
+            if (!response.ok) {
+                const errText = await response.text().catch(() => '');
+                throw new Error(`HTTP ${response.status}${errText ? ` ${errText.slice(0, 100)}` : ''}`);
+            }
+        } else {
+            response = await fetch(`${baseUrl}/models`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await safeResponseJson(response);
+        const models = extractModelIds(data);
+        if (models.length > 0) {
+            setEditPresetModels(models);
+            if (!models.includes(editPresetModel)) setEditPresetModel(models[0]);
+            addToast(`拉到 ${models.length} 个模型，点击 Model 输入框选择`, 'success');
+        } else { addToast('模型列表为空或格式不兼容', 'error'); }
+    } catch (error: any) {
+        console.error(error);
+        addToast(`拉取失败${error?.message ? `：${error.message}` : ''}`, 'error');
+    } finally {
+        setEditPresetFetching(false);
     }
   };
 
@@ -4063,15 +4122,40 @@ const Settings: React.FC = () => {
               </div>
               <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">URL</label>
-                  <input value={editPresetUrl} onChange={e => setEditPresetUrl(e.target.value)} placeholder="https://..." className="w-full bg-slate-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-primary" />
+                  <input value={editPresetUrl} onChange={e => setEditPresetUrl(e.target.value)} placeholder="https://... 或 http://...（本地页面支持 http）" className="w-full bg-slate-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-primary" />
               </div>
               <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Key</label>
                   <input type="password" value={editPresetKey} onChange={e => setEditPresetKey(e.target.value)} placeholder="sk-..." className="w-full bg-slate-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-primary" />
               </div>
               <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Model</label>
-                  <input value={editPresetModel} onChange={e => setEditPresetModel(e.target.value)} placeholder="模型名称" className="w-full bg-slate-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-primary" />
+                  <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Model</label>
+                      <button
+                          type="button"
+                          onClick={fetchEditPresetModels}
+                          disabled={editPresetFetching}
+                          className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-primary/10 text-primary active:scale-95 transition-transform disabled:opacity-50"
+                      >
+                          {editPresetFetching ? '拉取中…' : '拉取模型'}
+                      </button>
+                  </div>
+                  <input value={editPresetModel} onChange={e => setEditPresetModel(e.target.value)} placeholder="模型名称（可点「拉取模型」自动填）" className="w-full bg-slate-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-primary" />
+                  {editPresetModels.length > 0 && (
+                      <div className="max-h-36 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/70 p-1.5 space-y-0.5">
+                          {editPresetModels.map(m => (
+                              <button
+                                  key={m}
+                                  type="button"
+                                  onClick={() => setEditPresetModel(m)}
+                                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-mono active:scale-[0.98] transition-transform ${m === editPresetModel ? 'bg-primary/10 text-primary font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+                              >
+                                  {m}
+                              </button>
+                          ))}
+                      </div>
+                  )}
+                  <p className="text-[9px] text-slate-300 leading-relaxed">拉取用弹窗里现填的 URL/Key；本地页面自动走本地转发，http 上游也支持。</p>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-3 space-y-3">
                   <div className="flex items-center justify-between gap-3">

@@ -80,12 +80,13 @@ const parseAnimFrames = (raw?: string): string[] => {
     return frames.length ? frames : DIG_FRAMES;
 };
 
+// 品级徽章统一中性色（卡片不再按品级分色；转盘彩色扇面不受影响）
 const GRADE_COLORS: Record<PetGrade, string> = {
-    A: 'text-amber-400 border-amber-400/60 bg-amber-400/10',
-    B: 'text-violet-400 border-violet-400/60 bg-violet-400/10',
-    C: 'text-sky-400 border-sky-400/60 bg-sky-400/10',
-    D: 'text-emerald-400 border-emerald-400/60 bg-emerald-400/10',
-    E: 'text-slate-400 border-slate-400/60 bg-slate-400/10',
+    A: 'text-slate-600 border-slate-400/70 bg-slate-400/10',
+    B: 'text-slate-600 border-slate-400/70 bg-slate-400/10',
+    C: 'text-slate-600 border-slate-400/70 bg-slate-400/10',
+    D: 'text-slate-600 border-slate-400/70 bg-slate-400/10',
+    E: 'text-slate-600 border-slate-400/70 bg-slate-400/10',
 };
 
 // 默认抽卡动画：盲文点阵数码猫三帧轮换（可在设置里改为自定义盲文或图片 URL）
@@ -269,7 +270,9 @@ const PetPvpApp: React.FC = () => {
     const logRef = useRef<HTMLDivElement>(null);
     const [battling, setBattling] = useState(false);
     // 出千 / 战后感言横幅 / 败者惩罚（转盘弹窗）
-    const [cheatUsed, setCheatUsed] = useState(false);
+    // 出千改开场选择：battleIntro=点开战后「要不要出千」的弹窗数据；activeCheat=本场生效中的出千（关掉=null）
+    const [battleIntro, setBattleIntro] = useState<null | { a: PetCombatant; b: PetCombatant; userSide: 'a' | 'b' }>(null);
+    const [activeCheat, setActiveCheat] = useState<null | { buff: Parameters<typeof simulateContinue>[4]; text: string }>(null);
     const [narrating, setNarrating] = useState(false);
     const [wheelModal, setWheelModal] = useState<null | { loserCharId: string; winnerCharId: string }>(null);
     const [wheelRotation, setWheelRotation] = useState(0);
@@ -289,9 +292,14 @@ const PetPvpApp: React.FC = () => {
         ...characters.map(c => ({ id: c.id, name: c.name, avatar: c.avatar })),
     ]), [characters, userProfile]);
 
-    // 战况日志自动滚到最新
+    // 战况日志自动滚到最新：回放每拍（eventIdx）、手动改写事件（出千开/关）、新战报进来都跟着滚
     useEffect(() => {
-        if (arena && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+        if (!arena || !logRef.current) return;
+        const stick = () => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; };
+        requestAnimationFrame(stick);
+        // intro→battle 的 max-h 展开动画要 700ms，展开完再补一次才贴底
+        const t = setTimeout(stick, 750);
+        return () => clearTimeout(t);
     }, [eventIdx, arena]);
     // intro 停留 2.4s → 丝滑过渡到战况推进
     useEffect(() => {
@@ -325,6 +333,47 @@ const PetPvpApp: React.FC = () => {
             }
             setMeta(loadedMeta);
             setLoaded(true);
+            // 装载即静默补账：上一场回放被关掉/没打完的（uncommitted）按记录胜负补结算 + 压记忆。
+            // 原来只在下一场开打前补——用户打完一场就收工的话，那场永远挂在未结算状态，
+            // 战绩页有记录但金币/删宠/记忆全没跟上（这就是「对战没正确计入历史」的另一半根因）。
+            const chars = await DB.getAllCharacters();
+            const battlesNow = bs;
+            let changed = false;
+            for (const rec of battlesNow) {
+                if (rec.committed && rec.memorySaved) continue;
+                if (!rec.committed) {
+                    const loserPetId = rec.winnerCharId === rec.aCharId ? rec.bPetId : rec.aPetId;
+                    if (loserPetId) {
+                        await DB.deletePet(loserPetId);
+                    }
+                    rec.committed = true;
+                    changed = true;
+                }
+                if (!rec.memorySaved) {
+                    const oneLiner = `${new Date(rec.createdAt).toLocaleDateString('zh-CN')}，${rec.aName}与 ${rec.bName} 进行了宠物对战，获胜方：${rec.aCharId === rec.winnerCharId ? rec.aName : rec.bName}。`;
+                    for (const cid of [rec.aCharId, rec.bCharId]) {
+                        if (cid === 'user') continue;
+                        const char = chars.find(c => c.id === cid) as any;
+                        if (!char) continue;
+                        const memRaw = char.memories;
+                        const tail = Array.isArray(memRaw) ? memRaw.slice(-29) : String(memRaw || '').split('\n').slice(-29);
+                        char.memories = [...tail, oneLiner];
+                    }
+                    rec.memorySaved = true;
+                    changed = true;
+                }
+                await DB.savePetBattle(rec);
+            }
+            if (changed) {
+                // 补记忆（updateCharacter 走 context 的落库通道，这里直接写回 DB）
+                for (const c of chars) {
+                    const char = c as any;
+                    if (battlesNow.some(rec => [rec.aCharId, rec.bCharId].includes(char.id))) {
+                        await DB.saveCharacter(char);
+                    }
+                }
+                setBattles([...battlesNow]);
+            }
         })();
     }, []);
 
@@ -356,23 +405,20 @@ const PetPvpApp: React.FC = () => {
         return { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model };
     };
 
-    // 角色提示词组装（和私聊同一套调用逻辑：ContextBuilder.buildCoreContext 内含世界书段落，
-    // 传入近期聊天消息后，关键词触发的世界书条目才能正确激活——与私聊/群聊行为一致）
+    // 角色提示词组装（和私聊一模一样的调用：ContextBuilder.buildCoreContext 完整输出
+    // ——世界书/世界观/印象/记忆库全在里面，零截断。近期消息只用于激活关键词条目）
     const buildCharPrompt = async (charId: string) => {
         if (charId === 'user') return `【用户本人】${userProfile.name || '我'}（你就是用户本人，用户的口吻随意自然）`;
         const char = characters.find(c => c.id === charId);
         if (!char) return '';
         let core = '';
         try {
-            // 近期消息传给世界书扫描（与私聊同源逻辑）；传 undefined 时关键词条目永远不亮
             const recentMsgs = await DB.getRecentMessagesByCharId(charId, 100);
             core = ContextBuilder.buildCoreContext(char, userProfile, true, undefined, undefined, { worldbookMessages: recentMsgs as any });
         } catch { /* ignore */ }
         let palace = '';
         try { palace = String(await injectMemoryPalace(char, undefined, '宠物对战') || ''); } catch { /* ignore */ }
-        const memRaw = (char as any).memories;
-        const tail = Array.isArray(memRaw) ? memRaw.slice(-8).join('\n') : String(memRaw || '').split('\n').slice(-10).join('\n');
-        return `【人设】${(char.systemPrompt || '').slice(0, 800)}\n【核心上下文】${core.slice(0, 700)}\n【记忆宫殿】${palace.slice(0, 500)}\n【近期记忆】${tail.slice(0, 350)}`;
+        return palace ? `${core}\n${palace}` : core;
     };
 
     // ─── 抽奖（脚本出结果；角色抽卡调一次 API 让角色评价；user 抽卡纯脚本）───
@@ -623,6 +669,16 @@ const PetPvpApp: React.FC = () => {
         const sides = resolveSides();
         if (!sides) return;
         const [a, b] = sides;
+        // user 参战 → 先弹「本场要不要出千」的选择；NPC 对战（rvr 等）直接开打
+        const userSide = a.charId === 'user' ? 'a' : b.charId === 'user' ? 'b' : null;
+        if (userSide) { setBattleIntro({ a, b, userSide }); return; }
+        await beginBattle(a, b, null);
+    };
+
+    // 真正开战：openingCheat 非空 = user 开场选了出千（untilRound>0 才真生效；被抓/搞砸只播一条战况）
+    const beginBattle = async (a: PetCombatant, b: PetCombatant, openingCheat: null | { buff: NonNullable<Parameters<typeof simulateContinue>[4]>; text: string }) => {
+        // 本场生效中的出千（「关闭出千」按钮的依据）；被抓/搞砸（untilRound 0）和 NPC 对战都清掉
+        setActiveCheat(openingCheat && openingCheat.buff.untilRound > 0 ? openingCheat : null);
         // 押注只扣本金（派彩等回放结束按最终胜负结算——出千可能翻转结果）；仅赌钱模式有效
         const betActive = (meta.punishMode || 'wheel') === 'bet';
         if (betActive && betSide && betAmount > 0) {
@@ -635,8 +691,8 @@ const PetPvpApp: React.FC = () => {
             // 0. 上一场未 commit 的先补结算，再把之前未压缩的战报压成一句话记忆
             await commitPendingRecords();
             await compressPendingBattleMemories();
-            // 1. 脚本模拟（战斗结果 + 赔率预演）——纯脚本，无 AI
-            const result = simulateBattle(a, b, BATTLE_MAX_ROUNDS);
+            // 1. 脚本模拟（战斗结果 + 赔率预演）——纯脚本，无 AI；开场出千的 buff 在这里生效
+            const result = simulateBattle(a, b, BATTLE_MAX_ROUNDS, openingCheat || undefined);
             const sim = estimateOdds(a, b, 200);
             const winnerCharId = result.winner === 'a' ? a.charId : b.charId;
             // 2. 押注信息（won/派彩推迟到回放结束）
@@ -659,12 +715,12 @@ const PetPvpApp: React.FC = () => {
             await DB.savePetBattle(record);
             setBattles(prev => [...prev, record]);
             // 4. 打开战斗页面逐拍回放，结束后结算 + AI 生成「败方评价 + 胜方回复」
-            setCheatUsed(false);
             setPunishResult(null);
             setNarrating(false);
             setEventIdx(0);
             setArenaPhase('intro');
             setArena({ a, b, events: result.events, winner: result.winner, record });
+            setBattleIntro(null); // 出千选择弹窗（若有）一并关掉
         } finally {
             setBattling(false);
         }
@@ -705,6 +761,21 @@ const PetPvpApp: React.FC = () => {
                 await DB.savePetBattle(record);
                 setBattles(prev => prev.map(x => x.id === record.id ? record : x));
                 setArena(cur => cur && cur.record.id === record.id ? { ...cur, record } : cur);
+                // 当场把这场战报压进双方角色记忆（原来要等下一场开打才补，最后一场永远进不了记忆）
+                {
+                    const oneLiner = `${new Date(record.createdAt).toLocaleDateString('zh-CN')}，${record.aName}（${charNameOf(record.aCharId)}）与 ${record.bName}（${charNameOf(record.bCharId)}）进行了宠物对战，${charNameOf(record.winnerCharId)} 的宠物获胜。`;
+                    for (const cid of [record.aCharId, record.bCharId]) {
+                        if (cid === 'user') continue;
+                        const char = characters.find(c => c.id === cid) as any;
+                        if (!char) continue;
+                        const memRaw = char.memories;
+                        const tail = Array.isArray(memRaw) ? memRaw.slice(-29) : String(memRaw || '').split('\n').slice(-29);
+                        updateCharacter(cid, { memories: [...tail, oneLiner] });
+                    }
+                    (record as any).memorySaved = true;
+                    await DB.savePetBattle(record);
+                    setBattles(prev => prev.map(x => x.id === record.id ? record : x));
+                }
                 // 赌钱惩罚：败者立刻赔给赢家（转盘模式由用户手点）
                 if ((meta.punishMode || 'wheel') === 'bet') {
                     const loserCharId = loserSide === 'a' ? arena.a.charId : arena.b.charId;
@@ -761,6 +832,10 @@ const PetPvpApp: React.FC = () => {
                                     ? { charId: sideArg.charId, groupId: commonGroup.id, role: 'assistant', type: 'text', content: text }
                                     : { charId: sideArg.charId, role: 'assistant', type: 'text', content: text });
                                 announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: sideArg.charId, charName: sideArg.charName });
+                                // 发给 user 私聊的那条（不在群里）才拉小窗；群消息走通讯录「群里聊」跳转
+                                if (!commonGroup) {
+                                    window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: sideArg.charId } }));
+                                }
                             }
                             announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: sideArg.charId, charName: sideArg.charName });
                         })(side, foe, won);
@@ -771,6 +846,8 @@ const PetPvpApp: React.FC = () => {
         }
         // ② 战后感言（已 commit 才按最终胜负要播报）。模式：导演=一次 API 整段（默认）；
         // 轮调=败者、胜者各调一次 API 按顺序落库（各说各话，先败后胜），共用 narrating 横幅。
+        // 轮盘模式不出战后感言：整场唯一一次 API 是抽完转盘后的惩罚回应（对战→战报→抽轮盘→调用）。
+        if ((meta.punishMode || 'wheel') === 'wheel') return;
         if (arena.record.narration) return;
         const replyMode = meta.battleReplyMode || 'director';
         if (replyMode === 'roundRobin') {
@@ -897,38 +974,51 @@ const PetPvpApp: React.FC = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [arena, arenaPhase, eventIdx]);
 
-    // ─── 出千：下一回合起随机 暴击/敏捷/闪避 翻倍两回合；可能失败/被抓（概率可在设置调），都会写进战况 ───
-    const handleCheat = () => {
-        if (!arena || cheatUsed || arena.record.committed) return;
-        const userSide: 'a' | 'b' | null = arena.a.charId === 'user' ? 'a' : arena.b.charId === 'user' ? 'b' : null;
-        if (!userSide) return;
-        const ev = arena.events[Math.min(eventIdx, arena.events.length - 1)];
+    // ─── 出千（开场选择制）：开战弹窗里 user 决定本场要不要出千。成功 = 随机属性全场
+    // 翻倍，直到 user 手动「关闭出千」或战斗结束；被抓 = 当场取消（无翻倍）；搞砸 =
+    // 什么都没发生。三种结果都写进战况。概率沿用设置里的 cheatSuccessRate/cheatCaughtRate ───
+    // 掷开场出千：untilRound>0 = 真生效（全场）；被抓/搞砸 = untilRound 0（永不生效，
+    // 但引擎照播 cheat 战况事件，三种结果都会出现在战斗日志里）
+    const rollOpeningCheat = (userSide: 'a' | 'b', me: PetCombatant, foe: PetCombatant): { buff: NonNullable<Parameters<typeof simulateContinue>[4]>; text: string } => {
         const success = Math.random() * 100 < (meta.cheatSuccessRate ?? 65);
-        const caught = Math.random() * 100 < (meta.cheatCaughtRate ?? 35);
+        const caught = success && Math.random() * 100 < (meta.cheatCaughtRate ?? 35);
         const stat = (['crit', 'spd', 'dodge'] as const)[Math.floor(Math.random() * 3)];
         const statName = stat === 'crit' ? '暴击' : stat === 'spd' ? '敏捷' : '闪避';
-        const me = userSide === 'a' ? arena.a : arena.b;
-        const foe = userSide === 'a' ? arena.b : arena.a;
-        setCheatUsed(true);
-        let cheatText: string;
-        let buff: Parameters<typeof simulateContinue>[4] = undefined;
-        if (success && !caught) {
-            cheatText = `【出千】${charNameOf('user')} 偷偷给 ${me.name} 做了手脚——${statName} 翻倍，持续两回合，没有被察觉…`;
-            buff = { side: userSide, stat, untilRound: ev.round + 2 };
-        } else if (success && caught) {
-            cheatText = `【出千】${me.name} 的 ${statName} 刚要翻倍，就被 ${foe.name} 当场抓包——手脚被拍掉，无效！`;
-        } else {
-            cheatText = `【出千】${charNameOf('user')} 想给 ${me.name} 做手脚，结果手一抖搞砸了，什么都没发生。`;
-        }
-        const cheatEvent: BattleEvent = { kind: 'cheat', atkSide: userSide, round: ev.round, text: cheatText, hpA: ev.hpA, hpB: ev.hpB };
-        // 从下一回合接着打（先手 = 本事件攻击方的对方）；剩余回合不足则按血量判定
-        const cont = simulateContinue(arena.a, arena.b, { hpA: ev.hpA, hpB: ev.hpB, round: ev.round + 1, attackerIsA: ev.atkSide === 'b' }, BATTLE_MAX_ROUNDS, buff);
+        const effective = success && !caught;
+        const text = effective
+            ? `【出千】${charNameOf('user')} 赛前偷偷给 ${me.name} 做了手脚——${statName} 全场翻倍（手动关闭或战斗结束前一直生效），没有被察觉…`
+            : success
+                ? `【出千】${me.name} 的 ${statName} 刚要翻倍，就被 ${foe.name} 当场抓包——手脚被拍掉，无效！`
+                : `【出千】${charNameOf('user')} 想给 ${me.name} 做手脚，结果手一抖搞砸了，什么都没发生。`;
+        return { buff: { side: userSide, stat, untilRound: effective ? BATTLE_MAX_ROUNDS + 1 : 0 }, text };
+    };
+
+    // 出千选择弹窗的按钮：正常打 → 直接开战；出千 → 掷完再开战
+    const startWithCheat = async (wantCheat: boolean) => {
+        if (!battleIntro) return;
+        const { a, b, userSide } = battleIntro;
+        const me = userSide === 'a' ? a : b;
+        const foe = userSide === 'a' ? b : a;
+        const openingCheat = wantCheat ? rollOpeningCheat(userSide, me, foe) : null;
+        setBattleIntro(null);
+        await beginBattle(a, b, openingCheat);
+    };
+
+    // 「关闭出千」：从当前回放位置无 buff 续打（属性翻倍即刻停止），事件/战报改写沿用旧机制
+    const closeCheat = () => {
+        if (!arena || !activeCheat || arena.record.committed) return;
+        const ev = arena.events[Math.min(eventIdx, arena.events.length - 1)];
+        const cheatOffText = `【出千】${charNameOf('user')} 悄悄收回了手脚——${arena.a.charId === 'user' ? arena.a.name : arena.b.name} 的翻倍效果即刻停止。`;
+        const cheatOffEvent: BattleEvent = { kind: 'cheat', atkSide: activeCheat.buff!.side, round: ev.round, text: cheatOffText, hpA: ev.hpA, hpB: ev.hpB };
+        // 从下一回合无 buff 接着打（先手 = 本事件攻击方的对方）；剩余回合不足则按血量判定
+        const cont = simulateContinue(arena.a, arena.b, { hpA: ev.hpA, hpB: ev.hpB, round: ev.round + 1, attackerIsA: ev.atkSide === 'b' }, BATTLE_MAX_ROUNDS, undefined);
         const shownNonChain = arena.events.slice(0, eventIdx + 1).filter(e => e.kind !== 'chain').length;
+        setActiveCheat(null);
         setArena({
             ...arena,
-            events: [...arena.events.slice(0, eventIdx + 1), cheatEvent, ...cont.events],
+            events: [...arena.events.slice(0, eventIdx + 1), cheatOffEvent, ...cont.events],
             winner: cont.winner,
-            record: { ...arena.record, rounds: [...arena.record.rounds.slice(0, shownNonChain), cheatText, ...cont.rounds] },
+            record: { ...arena.record, rounds: [...arena.record.rounds.slice(0, shownNonChain), cheatOffText, ...cont.rounds] },
         });
     };
 
@@ -1011,6 +1101,8 @@ const PetPvpApp: React.FC = () => {
                 if (reaction) {
                     await DB.saveMessage({ charId: loserCharId, role: 'assistant', type: 'text', content: reaction });
                     announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: loserCharId, charName: loserName });
+                    // 落库即拉起小窗（MiniChatWindow 监听这个事件；点红点才是通讯录列表）
+                    window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: loserCharId } }));
                 }
                 announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: loserCharId, charName: loserName });
             })();
@@ -1122,10 +1214,10 @@ const PetPvpApp: React.FC = () => {
                         {!intro && ev.kind === 'dodge' && <div className="text-center text-sm font-bold text-sky-300 animate-fade-in">闪避！</div>}
                     </div>
                 </div>
-                {/* 出千（对战中限一次，user 参战才有） */}
-                {!intro && !done && (arena.a.charId === 'user' || arena.b.charId === 'user') && !cheatUsed && !arena.record.committed && (
-                    <button onClick={handleCheat} className="w-full py-2 rounded-xl border border-fuchsia-300 bg-fuchsia-50 text-fuchsia-600 text-xs font-bold active:scale-[0.98]">
-                        <span className="flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 出千（限一次：下回合随机 暴击/敏捷/闪避 翻倍 2 回合，可能被抓）</span>
+                {/* 关闭出千：开场选了出千且正在生效才有；user 手动关才停（不关则效果持续到战斗结束） */}
+                {!intro && !done && activeCheat && !arena.record.committed && (
+                    <button onClick={closeCheat} className="w-full py-2 rounded-xl border border-fuchsia-300 bg-fuchsia-50 text-fuchsia-600 text-xs font-bold active:scale-[0.98]">
+                        <span className="flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 关闭出千（翻倍效果当场停止，不关则一直生效）</span>
                     </button>
                 )}
                 {/* 战后感言请求中横幅（文字可在设置里改） */}
@@ -1194,8 +1286,8 @@ const PetPvpApp: React.FC = () => {
             {animScene && (
                 <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-6" onClick={() => { setAnimScene(null); setResultModal(cur => cur ?? { pet: animScene.pet }); }}>
                     <div className="bg-white rounded-2xl w-full max-w-sm p-5 relative animate-fade-in" onClick={e => e.stopPropagation()}>
-                        {/* 动画区：图片模式（URL，支持 GIF）或盲文多帧轮换（默认三帧数码猫/自定义空行分隔多帧） */}
-                        <div className="rounded-xl bg-[#f6f3ec] border border-[#7d7264]/30 flex items-center justify-center h-56 overflow-hidden">
+                        {/* 动画区：图片模式（URL，支持 GIF）或盲文多帧轮换（默认三帧数码猫/自定义空行分隔多帧）——纯白底，和结果卡一个色 */}
+                        <div className="rounded-xl bg-white border border-slate-200 flex items-center justify-center h-56 overflow-hidden">
                             {meta.drawAnimMode === 'image' && meta.drawAnimUrl
                                 ? <img src={meta.drawAnimUrl} className="max-h-full max-w-full object-contain" />
                                 : (() => { const frames = parseAnimFrames(meta.drawAnimBraille); const m = dotMeasure(frames[0]); return <pre className="font-mono whitespace-pre text-center text-slate-600" style={{ fontSize: dotFontPx(m.lines, m.cols, 320, 210), lineHeight: 1.15, animation: 'petBob 900ms ease-in-out infinite alternate' }}>{frames[digFrame % frames.length]}</pre>; })()}
@@ -1213,14 +1305,14 @@ const PetPvpApp: React.FC = () => {
                             const pet = resultModal.pet;
                             const dot = pet.kaomoji || '';
                             if (pet.imageRef) return (
-                                <div className="rounded-xl bg-[#f6f3ec] border border-[#7d7264]/30 flex items-center justify-center h-56 overflow-hidden mb-3">
+                                <div className="rounded-xl bg-white border border-slate-200 flex items-center justify-center h-56 overflow-hidden mb-3">
                                     <TokenImg value={pet.imageRef} className="max-h-full max-w-full object-contain" />
                                 </div>
                             );
                             if (dot.includes('\n')) {
                                 const m = dotMeasure(dot);
                                 return (
-                                    <div className="rounded-xl bg-[#f6f3ec] border border-[#7d7264]/30 flex items-center justify-center h-56 overflow-hidden mb-3">
+                                    <div className="rounded-xl bg-white border border-slate-200 flex items-center justify-center h-56 overflow-hidden mb-3">
                                         <pre className="font-mono whitespace-pre text-center text-slate-700" style={{ fontSize: dotFontPx(m.lines, m.cols, 320, 210), lineHeight: 1.15 }}>{dot}</pre>
                                     </div>
                                 );
@@ -1308,6 +1400,35 @@ const PetPvpApp: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* 出千选择弹窗：开战时 user 参战才弹（选完才真正开打）；点背景=取消整场对战 */}
+            {battleIntro && (() => {
+                const { a, b, userSide } = battleIntro;
+                const me = userSide === 'a' ? a : b;
+                const foe = userSide === 'a' ? b : a;
+                return (
+                    <div className="fixed inset-0 z-[225] bg-black/50 flex items-center justify-center p-6" onClick={() => setBattleIntro(null)}>
+                        <div className="w-full max-w-xs rounded-2xl bg-white p-4 space-y-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+                            <div className="text-center space-y-1">
+                                <div className="flex items-center justify-center gap-1.5 text-sm font-black text-slate-800"><IcoDice className="w-4 h-4" /> 本场要不要出千？</div>
+                                <div className="text-[10px] leading-relaxed text-slate-500">
+                                    {me.name} vs {foe.name}。出千成功 = 随机一项属性（暴击/敏捷/闪避）<b>全场翻倍</b>，
+                                    不主动关就持续到战斗结束；可能失败或被对方抓包（概率在设置里调）。选中后对战中还能「关闭出千」。
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button onClick={() => startWithCheat(true)} className="py-2.5 rounded-xl bg-fuchsia-500 text-white text-xs font-bold active:scale-[0.98] shadow-sm">
+                                    出千
+                                </button>
+                                <button onClick={() => startWithCheat(false)} className="py-2.5 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">
+                                    正常打
+                                </button>
+                            </div>
+                            <div className="text-center text-[10px] text-slate-400">点弹窗外的空白处 = 放弃本场对战</div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* 惩罚转盘弹窗（圆形转盘）：旋转落定 → 写记忆 → 回应发到私聊（弹窗随时可关） */}
             {wheelModal && (() => {
@@ -1948,10 +2069,20 @@ const PetPvpApp: React.FC = () => {
                                             </div>
                                         );
                                     })()}
-                                    {battles.length > 0 && (
-                                        <button onClick={async () => { for (const b of battles) await DB.deletePetBattle(b.id); setBattles([]); addToast('已清空全部战报与战绩', 'success'); }}
-                                            className="w-full py-2.5 rounded-xl border border-rose-200 text-rose-500 text-xs font-bold flex items-center justify-center gap-1.5"><IcoTrash className="w-3.5 h-3.5" /> 清空全部战报 / 战绩</button>
-                                    )}
+                                    {/* 重置：宠物+战报+金币+默认出战全清（角色记忆和宠物池模板、提示词等设置保留） */}
+                                    <button onClick={() => {
+                                        if (!window.confirm('重置宠物对战？\n\n会清掉：全部宠物（保留宠物池模板）、全部战报战绩、所有角色金币恢复 1000、默认出战表。\n不会动：角色记忆、宠物池模板、提示词/动画/概率等设置。\n\n确定重置吗？')) return;
+                                        (async () => {
+                                            await DB.clearAllPets(true);
+                                            for (const b of battles) await DB.deletePetBattle(b.id);
+                                            await DB.savePetMeta({ ...meta, goldByChar: {}, defaultPetByChar: {} });
+                                            setPets(await DB.getAllPets());
+                                            setBattles([]);
+                                            setMeta({ ...meta, goldByChar: {}, defaultPetByChar: {} });
+                                            addToast('宠物对战已重置（金币恢复默认，记忆和模板保留）', 'success');
+                                        })();
+                                    }}
+                                        className="w-full py-2.5 rounded-xl border border-rose-200 text-rose-500 text-xs font-bold flex items-center justify-center gap-1.5"><IcoTrash className="w-3.5 h-3.5" /> 重置宠物对战（宠物+战报+金币+默认出战）</button>
                                 </>
                             );
                         })()}

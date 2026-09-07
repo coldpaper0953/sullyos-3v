@@ -142,16 +142,29 @@ export interface BattleEvent {
 /**
  * 回合制战斗模拟。sideA/sideB 为双方战斗体；totalStatPoints 用于文案说明。
  * 追击机制：每次攻击后攻击方有 spd% 概率保留回合继续攻击（单回合内最多连击 4 次）。
+ * openingCheat：开场出千（user 战前选「出千」时传）——buff 有值时属性翻倍从第 1 回合
+ * 生效直到 untilRound（BATTLE_MAX_ROUNDS+1 = 全场）；被抓/搞砸时 buff 为空、只播一条
+ * cheat 事件把战况写进日志。
  */
-export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRounds = 30): BattleResult {
+export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRounds = 30, openingCheat?: {
+    buff: CheatBuff;
+    text: string;
+}): BattleResult {
     const rounds: string[] = [];
     const events: BattleEvent[] = [];
     const pushEvent = (kind: BattleEvent['kind'], atkSide: 'a' | 'b', round: number, text: string, dmg?: number) => {
         events.push({ kind, atkSide, round, text, hpA: hpA, hpB: hpB, dmg });
     };
     let hpA = sideA.hp, hpB = sideB.hp;
+    // 开场出千：第 1 回合起翻倍生效（与 simulateContinue 的 buffed 同口径）
+    const cheat = openingCheat?.buff;
+    const buffed = (isA: boolean, base: number) =>
+        cheat && cheat.untilRound >= 1 && ((cheat.side === 'a') === isA) ? base * 2 : base;
+    const effCrit = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).crit);
+    const effSpd = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).spd);
+    const effDodge = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).dodge);
     // 先手：攻速高者；相同则随机
-    let attackerIsA = sideA.spd === sideB.spd ? Math.random() < 0.5 : sideA.spd > sideB.spd;
+    let attackerIsA = effSpd(true) === effSpd(false) ? Math.random() < 0.5 : effSpd(true) > effSpd(false);
     const attacker = () => (attackerIsA ? sideA : sideB);
     const defender = () => (attackerIsA ? sideB : sideA);
     const hpOf = (isA: boolean) => (isA ? hpA : hpB);
@@ -160,6 +173,10 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
     const startText = `开局：${sideA.name}（HP ${sideA.hp}）vs ${sideB.name}（HP ${sideB.hp}），${attacker().name} 抢到先手。`;
     rounds.push(startText);
     pushEvent('start', attackerIsA ? 'a' : 'b', 0, startText);
+    if (openingCheat) {
+        rounds.push(openingCheat.text);
+        pushEvent('cheat', openingCheat.buff.side, 0, openingCheat.text);
+    }
 
     let round = 1;
     let ended = false;
@@ -171,12 +188,12 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
         for (;;) {
             if (def.hp <= 0 || hpOf(!attackerIsA) <= 0) { ended = true; break; }
             // 闪避判定
-            if (Math.random() * 100 < def.dodge) {
+            if (Math.random() * 100 < effDodge(!attackerIsA)) {
                 const t = `第${round}回合：${atk.name} 发起攻击，被 ${def.name} 闪避了！`;
                 rounds.push(t);
                 pushEvent('dodge', attackerIsA ? 'a' : 'b', round, t);
             } else {
-                const isCrit = Math.random() * 100 < atk.crit;
+                const isCrit = Math.random() * 100 < effCrit(attackerIsA);
                 const dmg = Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1)));
                 deal(attackerIsA, dmg);
                 const t = `第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`;
@@ -192,7 +209,7 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
             }
             // 敏捷保留回合判定
             chains++;
-            if (chains >= 4 || Math.random() * 100 >= atk.spd) break;
+            if (chains >= 4 || Math.random() * 100 >= effSpd(attackerIsA)) break;
             const t = `${atk.name} 身形一闪，抢在 ${def.name} 反应之前再次出手！`;
             rounds.push(t);
             pushEvent('chain', attackerIsA ? 'a' : 'b', round, t);

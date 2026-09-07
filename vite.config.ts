@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { execSync } from 'node:child_process';
 import { bakeVoiceMiddleware } from './server/bake-voice-middleware';
+import { llmProxyMiddleware } from './server/llm-proxy-middleware';
 
 // 构建时抓 git 分支 + short commit + UTC+8 构建时间，注入到版本信息显示。
 // 非 git 环境（容器、tarball 部署）退化成 'unknown'，不影响构建。
@@ -68,6 +69,15 @@ export default defineConfig({
       name: 'bake-voice-middleware',
       configureServer(server) {
         server.middlewares.use('/api/minimax/bake-voice', bakeVoiceMiddleware);
+      },
+    },
+    {
+      // LLM 转发（模仿酒馆 CUSTOM 源）：dev 5173 下 POST /api/llm/proxy 由 Node
+      // 服务端转发到上游，支持 http:// 与 SSE 流；手机/PC 本地静态部署走
+      // scripts/local-static-server.cjs 里同款实现。
+      name: 'llm-proxy-middleware',
+      configureServer(server) {
+        server.middlewares.use('/api/llm/proxy', llmProxyMiddleware);
       },
     },
   ],
