@@ -108,7 +108,7 @@ const MiniChatWindow: React.FC = () => {
                 <button
                     onClick={() => { setOpen(true); setView('contacts'); }}
                     title={`${totalUnread} 条未读 · 点击打开通讯录`}
-                    className="fixed left-2 top-1 z-[95] min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[9px] font-black shadow-md border border-white/60 flex items-center justify-center animate-pulse"
+                    className="fixed left-2 top-1 z-[95] min-w-[18px] h-[18px] px-1 rounded-full bg-slate-800 text-white text-[9px] font-black shadow-md border border-white/60 flex items-center justify-center animate-pulse"
                 >
                     {totalUnread > 99 ? '99+' : totalUnread}
                 </button>
@@ -138,16 +138,16 @@ const MiniChatWindow: React.FC = () => {
                                         <TokenImg value={c?.avatar} className="w-9 h-9 rounded-full object-cover shrink-0" />
                                         <div className="flex-1 min-w-0">
                                             <div className="text-xs font-bold text-slate-700 truncate">{c?.name || '未知联系人'}</div>
-                                            <div className="text-[10px] text-rose-500 font-bold">{count} 条新消息</div>
+                                            <div className="text-[10px] text-slate-500 font-bold">{count} 条新消息</div>
                                         </div>
                                         {grp && (
                                             <button onClick={() => jumpToGroup(grp.id)} title={`跳转到群聊「${grp.name}」`}
-                                                className="shrink-0 px-2 py-1.5 rounded-lg bg-violet-50 border border-violet-200 text-violet-600 text-[10px] font-bold active:scale-95">
+                                                className="shrink-0 px-2 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 text-[10px] font-bold active:scale-95">
                                                 群里聊
                                             </button>
                                         )}
                                         <button onClick={() => openChat(charId)} title="小窗私聊"
-                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-600 text-[10px] font-bold active:scale-95">
+                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-800 text-white text-[10px] font-bold active:scale-95">
                                             私聊
                                         </button>
                                         <button onClick={() => clearUnread(charId)} title="忽略：清掉未读，不看内容"
