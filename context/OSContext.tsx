@@ -3566,6 +3566,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const addToast = (message: string, type: Toast['type'] = 'info') => { const id = Date.now().toString(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 3000); };
   const showError = (title: string, details: string) => {
       setErrorDialog({ title, details });
+      // 报错历史留档：弹窗 10 秒自动消失，但过往报错都存 localStorage（最多 50 条）供回看
+      try {
+          const KEY = 'petpvp-error-history';
+          const hist: Array<{ title: string; details: string; at: number }> = JSON.parse(localStorage.getItem(KEY) || '[]');
+          hist.unshift({ title, details: details.slice(0, 2000), at: Date.now() });
+          localStorage.setItem(KEY, JSON.stringify(hist.slice(0, 50)));
+      } catch { /* 存不上就算了，不影响弹窗 */ }
       // showError 是分发型入口，title 由调用方传。这里写显式白名单：
       // 只有下面这三个写死的 title 会上报，其它（含以后新加的）一律不发，
       // 也绝不把 title 原样透传出去（免得哪天有人往里塞 URL 或报错原文）。

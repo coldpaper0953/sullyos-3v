@@ -4257,6 +4257,13 @@ export interface PetMeta {
     promptGacha?: string;       // 抽卡评价提示词模板（占位符可替换）
     promptBattle?: string;      // 战报播报提示词模板（占位符可替换）
     modelMode?: 'sub' | 'main'; // AI 调用模型：sub=副API（默认）/ main=主聊天模型
+    /** @deprecated 已由 apiPresetIdGacha / apiPresetIdBattle 取代（保留兼容旧存档，不再出 UI） */
+    apiPresetIdGacha?: string;  // 抽卡评价专用 API 预设 id（不设 = 主聊天 API）
+    apiPresetIdBattle?: string; // 战报播报专用 API 预设 id（不设 = 主聊天 API）
+    battleReplyMode?: 'director' | 'roundRobin'; // 战后发言模式：导演=一次 API 整段（默认）/ roundRobin=败者胜者各调一次按序落库
+    promptPunish?: string;      // 轮盘惩罚回应提示词模板（{人设}{惩罚}{赢家}）
+    promptBetStake?: string;    // 赌钱模式压金提示词模板（{A主人}{B主人}{金额}）
+    gachaCharIds?: string[];    // 批量抽奖对象（多选；含 user）——「谁去抽奖」多选态
 }
 
 /**

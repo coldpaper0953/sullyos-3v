@@ -744,6 +744,12 @@ export default function MemoryPalaceApp() {
     const [digestReports, setDigestReports] = useState<DigestReport[] | null>(null);
     const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
     useEffect(() => { setDigestReports(null); setExpandedReportId(null); }, [char?.id]);
+    // 白屏兜底：view 停在房间/记忆详情但选中项已被删（删记忆后 selectedRoom/selectedNode 被清空）
+    // 时，渲染链所有分支都不命中会掉到末尾的 return null —— 整页空白。这里自动退回宫殿视图。
+    useEffect(() => {
+        if (view === 'room' && !selectedRoom) setView('palace');
+        if (view === 'memory' && !selectedNode) setView(selectedRoom ? 'room' : 'palace');
+    }, [view, selectedRoom, selectedNode]);
     // 门牌历史回填（老用户把积压立牌）
     const [bootstrapping, setBootstrapping] = useState(false);
     const [bootstrapStatus, setBootstrapStatus] = useState<string | null>(null);

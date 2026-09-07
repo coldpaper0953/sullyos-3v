@@ -84,9 +84,9 @@ async function extractMonthMemories(
     relatedMemories: RelatedMemoryRef[],
 ): Promise<ChunkExtractionResult> {
 
-    // 拼接该月所有日度总结，不截断
+    // 拼接该月所有日度总结，不截断（date 缺失的条目排在最前，不再让 localeCompare 崩整个记忆宫殿）
     const logsText = dailyLogs
-        .sort((a, b) => a.date.localeCompare(b.date))
+        .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
         .map(m => `[${m.date}] (${m.mood || 'neutral'}): ${m.summary}`)
         .join('\n\n');
 
@@ -272,7 +272,7 @@ export function getAvailableMonths(memories: MemoryFragment[]): string[] {
  * 将一个月的日志拆成上旬/中旬/下旬 3 个分块
  */
 function splitMonthToThirds(monthKey: string, dailyLogs: MemoryFragment[]): { key: string; logs: MemoryFragment[] }[] {
-    const sorted = dailyLogs.sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = dailyLogs.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
     const upper: MemoryFragment[] = [];   // 1-10 日
     const middle: MemoryFragment[] = [];  // 11-20 日
     const lower: MemoryFragment[] = [];   // 21-31 日
@@ -391,7 +391,7 @@ export async function migrateOldMemories(
         // 1) 取相关旧记忆（含本次迁移已落地的较早 chunk，所以"3 月上旬→3 月中旬"能跨 chunk 关联）
         //    细粒度策略：日志归档是 YAML 列表 (`- 事件X`)，按 bullet 拆成每条事件一个 query；
         //    切不出列表（模板被改过）时 fallback 到旧的 3 段切法
-        const sortedLogs = dailyLogs.slice().sort((a, b) => a.date.localeCompare(b.date));
+        const sortedLogs = dailyLogs.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
         let logSnippets = splitLogsToBullets(sortedLogs);
         let strategy = 'bullets';
         if (logSnippets.length === 0) {

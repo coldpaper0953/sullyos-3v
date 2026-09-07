@@ -530,6 +530,19 @@ const GroupChat: React.FC = () => {
     // Token 统计 — 对齐私聊 ChatHeader 的 token badge
     const [lastTokenUsage, setLastTokenUsage] = useState<number | null>(null);
     const [tokenBreakdown, setTokenBreakdown] = useState<{ prompt: number; completion: number; total: number; msgCount: number; pass: string } | null>(null);
+
+    // 外部跳群入口：宠物对战等模块派发 `groupchat-jump`（detail: { groupId }），
+    // 打开群聊 App 并直接进到该群的聊天视图（找不到群就停在群列表）。
+    useEffect(() => {
+        const h = (e: Event) => {
+            const { groupId } = ((e as CustomEvent).detail || {}) as { groupId?: string };
+            const g = groups.find(x => x.id === groupId);
+            if (g) { setActiveGroup(g); setView('chat'); }
+            else setView('list');
+        };
+        window.addEventListener('groupchat-jump', h);
+        return () => window.removeEventListener('groupchat-jump', h);
+    }, [groups]);
     
     // UI State — 面板状态对齐私聊 ChatInputArea 的 showPanel 约定
     const [showPanel, setShowPanel] = useState<'none' | 'actions' | 'emojis' | 'chars'>('none');

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { trackEvent } from '../../utils/analytics';
 
 interface ErrorDialogProps {
@@ -10,8 +10,29 @@ interface ErrorDialogProps {
 
 // 全局错误弹窗：toast 一行装不下的长报错走这里 —— 多行 monospace 预览框 + 复制按钮,
 // 手机上没法开 console 时, 用户能直接看清、长按复制原文反馈过来。
+// 没人点的话 10 秒自动消失；过往报错已存 localStorage（petpvp-error-history，最多 50 条）。
 const ErrorDialog: React.FC<ErrorDialogProps> = ({ isOpen, title, details, onClose }) => {
     const [copied, setCopied] = useState(false);
+    const [left, setLeft] = useState(10);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const closeRef = useRef(onClose);
+    closeRef.current = onClose;
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setLeft(10);
+        timerRef.current = setInterval(() => {
+            setLeft(s => {
+                if (s <= 1) {
+                    if (timerRef.current) clearInterval(timerRef.current);
+                    closeRef.current();
+                    return 0;
+                }
+                return s - 1;
+            });
+        }, 1000);
+        return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    }, [isOpen]);
 
     if (!isOpen) return null;
 
@@ -71,7 +92,7 @@ const ErrorDialog: React.FC<ErrorDialogProps> = ({ isOpen, title, details, onClo
                         onClick={onClose}
                         className="px-4 py-2 bg-red-500 rounded-xl text-sm font-bold text-white shadow-lg shadow-red-200 active:scale-95 transition-transform"
                     >
-                        关闭
+                        关闭（{left}s）
                     </button>
                 </div>
             </div>
