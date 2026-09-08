@@ -146,6 +146,12 @@ const MiniChatWindow: React.FC = () => {
                                                 群里聊
                                             </button>
                                         )}
+                                        {/* 快捷入口：进该角色的完整私聊页（选中角色并打开聊天 App） */}
+                                        <button onClick={() => { setActiveCharacterId(charId); openApp(AppID.Chat); setOpen(false); setView('redDot'); }}
+                                            title="进入完整私聊页面"
+                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-[#E9E8DB] border border-[#AFA3A1]/70 text-[#3a3a36] text-[10px] font-bold active:scale-95">
+                                            完整私聊
+                                        </button>
                                         <button onClick={() => openChat(charId)} title="小窗私聊"
                                             className="shrink-0 px-2 py-1.5 rounded-lg bg-[#DAD8C0] border border-[#AFA3A1] text-[#3a3a36] text-[10px] font-bold active:scale-95">
                                             私聊
@@ -212,6 +218,13 @@ const MiniChatWindow: React.FC = () => {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="w-2 h-2"><path d="M14.5 5.5L8 12l6.5 6.5" /></svg>
                         </button>
                         <span className="text-[10px] font-bold text-[#3a3a36] flex-1 truncate">{charOf(targetChar)?.name || '私聊'}</span>
+                        {/* 快捷入口：跳到完整的私聊页面（当前角色已选中，Chat 打开即对准）；点击不触发标题栏拖动 */}
+                        <button onClick={() => { openApp(AppID.Chat); setOpen(false); setView('redDot'); }}
+                            onPointerDown={e => e.stopPropagation()}
+                            title="进入完整私聊页面"
+                            className="w-4 h-4 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90 shrink-0">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="w-2.5 h-2.5"><path d="M9 5H5v4M15 19h4v-4M5 15v4h4M19 9V5h-4" /></svg>
+                        </button>
                         <button onClick={closeAndMarkRead} title="关闭并标记已读（已读不回）"
                             className="w-4 h-4 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="w-2 h-2"><path d="M6 6l12 12M18 6L6 18" /></svg>
