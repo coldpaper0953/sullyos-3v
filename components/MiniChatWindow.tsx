@@ -43,22 +43,34 @@ const MiniChatWindow: React.FC = () => {
     const totalUnread = unreadEntries.reduce((s, [, n]) => s + (n || 0), 0);
     const topUnreadChar = unreadEntries.sort((a, b) => (b[1] || 0) - (a[1] || 0))[0]?.[0] || '';
 
+    // 强制对准目标角色再开窗：事件（petpvp-minichat-open）可能在用户正点另一条目时到达，
+    // 不先锁定角色就会把 A 的消息窗切到 B（两个 NPC 的私聊看起来串到了同一个会话）。
+    // 锁定 = 显示层与落库的 charId 恒一致，之后到达的事件由自己的窗口处理，互不劫持。
     const openChat = (charId: string) => {
         if (!charId) return;
-        setTargetChar(charId);
         setActiveCharacterId(charId);
+        setTargetChar(charId);
         setView('chat');
         setOpen(true);
     };
 
+    // 双 NPC 分别私发吐槽时两个事件几乎同时到达：同一时间只保留最后一个目标，
+    // 已开的窗不切换角色（聊天内容按 activeCharacterId 过滤，切换 = 串台的观感）。
+    const openChatPinned = useRef('');
     useEffect(() => {
         const h = (e: Event) => {
             const { charId } = ((e as CustomEvent).detail || {}) as { charId?: string };
-            openChat(charId || topUnreadChar);
+            // 窗已开着且目标没变 → 只补未读（reload 由 lastMsgTimestamp 驱动），不动窗口
+            if (open && view === 'chat' && openChatPinned.current && charId !== openChatPinned.current) {
+                return;
+            }
+            const target = charId || topUnreadChar;
+            openChatPinned.current = target || '';
+            openChat(target);
         };
         window.addEventListener('petpvp-minichat-open', h);
         return () => window.removeEventListener('petpvp-minichat-open', h);
-    }, [topUnreadChar]);
+    }, [topUnreadChar, open, view]);
 
     // 拖动弹窗标题栏：pointerdown 记录起点，pointermove 更新（限屏内），pointerup 收尾
     useEffect(() => {
@@ -152,7 +164,7 @@ const MiniChatWindow: React.FC = () => {
                                             className="shrink-0 px-2 py-1.5 rounded-lg bg-[#E9E8DB] border border-[#AFA3A1]/70 text-[#3a3a36] text-[10px] font-bold active:scale-95">
                                             完整私聊
                                         </button>
-                                        <button onClick={() => openChat(charId)} title="小窗私聊"
+                                        <button onClick={() => { openChatPinned.current = charId; openChat(charId); }} title="小窗私聊"
                                             className="shrink-0 px-2 py-1.5 rounded-lg bg-[#DAD8C0] border border-[#AFA3A1] text-[#3a3a36] text-[10px] font-bold active:scale-95">
                                             私聊
                                         </button>
@@ -189,7 +201,7 @@ const MiniChatWindow: React.FC = () => {
                         .sully-mini-chat .sully-chat-inputbar { padding: 4px !important; gap: 6px !important; }
                         .sully-mini-chat .sully-chat-inputbar > div { padding: 4px 6px !important; gap: 6px !important; }
                         .sully-mini-chat .sully-chat-inputbar textarea { padding: 6px 8px !important; font-size: 13px !important; max-height: 2.6rem !important; }
-                        .sully-mini-chat .sully-chat-inputbar .sully-chat-panel { max-height: 9.5rem !important; }
+                        .sully-mini-chat .sully-chat-inputbar .sully-chat-panel { max-height: 15.5rem !important; }
                         /* 功能面板（+号展开的按钮格）：小窗 280px 宽装不下原版 4×56px+32px 间距——等比缩小 */
                         .sully-mini-chat .sully-chat-panel .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 8px !important; padding: 10px !important; }
                         .sully-mini-chat .sully-chat-panel .w-14.h-14 { width: 2.5rem !important; height: 2.5rem !important; }

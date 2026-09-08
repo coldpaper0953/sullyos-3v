@@ -872,14 +872,23 @@ const PetPvpApp: React.FC = () => {
     // ─── ④ NPC 选宠（user 参战时）：把候选列表交给 NPC 按人设挑一只（调一次 API）───
     // 返回 { petName, line }：petName 没匹配到候选时调用方回落脚本就近匹配；line 是 20 字心声。
     // 给 AI 的 user 宠物信息只有名字和品级——NPC「看不到」对手宠物的数值底细。
-    // 思考模型防线：glm 等 reasoning 吃光 content 时回落链会拿到英文思维链——
-    // 含尖括号占位符 / 全无中文的文本一律当泄漏丢弃（宁可空缺不上屏英文）。
+    // 思考模型防线：glm 等 reasoning 吃光 content 时回落链会拿到英文思维链——里面常混着
+    // 角色中文名，单看「有没有中文」挡不住。按中文占比判定：中文字符占比 < 20% 视为泄漏丢弃。
+    const isCnLeak = (text: string): boolean => {
+        const t = (text || '').replace(/<[^>]*>|<\/[^>]*>/g, '').trim();
+        if (!t) return true;
+        const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+        const letters = (t.match(/[A-Za-z]/g) || []).length;
+        return cjk / (cjk + letters || 1) < 0.2;
+    };
     const parseCnLine = (raw: string, labels: string[]): { line: string; picks: Record<string, string> } => {
         const text = (raw || '').replace(/<[^>]*>|<\/[^>]*>/g, '').trim();
         const picks: Record<string, string> = {};
         for (const label of labels) {
             const m = text.match(new RegExp(`${label}[：:]\\s*(.+)`));
-            picks[label] = m ? m[1].trim().slice(0, 80) : '';
+            const val = m ? m[1].trim().slice(0, 80) : '';
+            // 占位符/英文思维链（如「[my emotional reaction, 10-30 characters]」）当空处理
+            picks[label] = isCnLeak(val) ? '' : val;
         }
         const main = picks[labels[0]] || '';
         const hasChinese = /[\u4e00-\u9fff]/.test(main);
@@ -1135,7 +1144,9 @@ const PetPvpApp: React.FC = () => {
                                     1, 60_000, { appName: '宠物对战', purpose: '随机对战发言' },
                                 );
                                 const d2 = await data;
-                                text = extractContent(d2).slice(0, 200);
+                                // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
+                                const rawRvr = (extractContent(d2) || '').trim();
+                                text = isCnLeak(rawRvr) ? '' : rawRvr.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
                             } catch { /* 失败就安静跳过 */ }
                             if (text) {
                                 await DB.saveMessage(commonGroup
@@ -1170,6 +1181,8 @@ const PetPvpApp: React.FC = () => {
                 const winner = record.winnerCharId === a.charId ? a : b;
                 setNarrating(true);
                 const lines: string[] = [];
+                // canvas：战后感言不留在战斗页——NPC 的发言分别发到各自私聊；user 自己那句不代替发送
+                const npcLines: { charId: string; text: string }[] = [];
                 try {
                     for (const speaker of [loser, winner]) {
                         const persona = await buildCharPrompt(speaker.charId, sessionRef.current?.lines);
@@ -1210,8 +1223,13 @@ const PetPvpApp: React.FC = () => {
                             1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
                         );
                         const d2 = await data;
-                        const text = extractContent(d2).slice(0, 200);
-                        if (text) lines.push(`${speaker.charId === 'user' ? (userProfile.name || '我') : speaker.charName}：${text}`);
+                        // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
+                        const rawCn = (extractContent(d2) || '').trim();
+                        const text = isCnLeak(rawCn) ? '' : rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
+                        if (text) {
+                            lines.push(`${speaker.charId === 'user' ? (userProfile.name || '我') : speaker.charName}：${text}`);
+                            if (speaker.charId !== 'user') npcLines.push({ charId: speaker.charId, text });
+                        }
                     }
                 } catch { /* 失败 → 脚本战报兜底 */ }
                 if (lines.length) {
@@ -1219,6 +1237,14 @@ const PetPvpApp: React.FC = () => {
                     record.promptSent = '（轮调模式：败者/胜者各自单独调用）';
                     await DB.savePetBattle(record);
                     setArena(cur => (cur && cur.record.id === record.id ? { ...cur, record: { ...record } } : cur));
+                }
+                // canvas：战后感言不留在战斗页——NPC 的发言分别发到各自私聊（红点+小窗），user 的话不代替发送
+                for (const nl of npcLines) {
+                    try {
+                        await DB.saveMessage({ charId: nl.charId, role: 'assistant', type: 'text', content: nl.text });
+                        announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: nl.charId, charName: charNameOf(nl.charId) });
+                        window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: nl.charId } }));
+                    } catch { /* 私聊落库失败不影响主流程 */ }
                 }
                 setNarrating(false);
             })();
@@ -1273,12 +1299,21 @@ const PetPvpApp: React.FC = () => {
                     1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
                 );
                 const d2 = await data;
-                const text = extractContent(d2);
+                // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
+                const rawCn = (extractContent(d2) || '').trim();
+                const text = isCnLeak(rawCn) ? '' : rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '');
                 if (text) {
                     record.narration = text;
                     record.promptSent = prompt;
                     await DB.savePetBattle(record);
                     setArena(cur => (cur && cur.record.id === record.id ? { ...cur, record: { ...record } } : cur));
+                    // canvas：战后感言不留在战斗页——发到对手 NPC 的私聊（红点+小窗），不代替 user 发言
+                    const oppId = a.charId === 'user' ? b.charId : a.charId;
+                    try {
+                        await DB.saveMessage({ charId: oppId, role: 'assistant', type: 'text', content: text.slice(0, 300) });
+                        announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: oppId, charName: charNameOf(oppId) });
+                        window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: oppId } }));
+                    } catch { /* 私聊落库失败不影响主流程 */ }
                 }
             } catch { /* 播报失败 → 脚本战报兜底 */ } finally {
                 setNarrating(false);
@@ -1397,9 +1432,9 @@ const PetPvpApp: React.FC = () => {
                 1, 90_000, { appName: '宠物对战', purpose: '出千中断解释' },
             );
             const d2 = await data;
-            // 思维链泄漏防线：无中文字符的「回复」= 英文思维链截断，丢弃走中文兜底
-            const rawAbort = extractContent(d2).slice(0, 200);
-            abortMsg = /[\u4e00-\u9fff]/.test(rawAbort) ? rawAbort : '';
+            // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃走中文兜底
+            const rawAbort = (extractContent(d2) || '').slice(0, 200);
+            abortMsg = isCnLeak(rawAbort) ? '' : rawAbort;
         } catch { /* 解释失败用兜底句 */ }
         if (!abortMsg) abortMsg = `${reaction || '出千被发现就别打了。'}这次对战到此为止。`;
         try {
@@ -1532,7 +1567,9 @@ const PetPvpApp: React.FC = () => {
                     1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
                 );
                 const d2 = await data;
-                reaction = extractContent(d2).slice(0, 200);
+                // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
+                const rawPun = (extractContent(d2) || '').trim();
+                reaction = isCnLeak(rawPun) ? '' : rawPun.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
             } catch { /* 回应失败不影响惩罚本身 */ }
             if (reaction) {
                 await DB.saveMessage({ charId: speakerCharId, role: 'assistant', type: 'text', content: reaction });
@@ -1660,20 +1697,11 @@ const PetPvpApp: React.FC = () => {
                         <span className="flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 关闭出千（翻倍效果当场停止，不关则一直生效）</span>
                     </button>
                 )}
-                {/* 战后感言请求中横幅（文字可在设置里改） */}
+                {/* 战后感言请求中横幅（文字可在设置里改）。canvas：感言生成后发私聊/小窗弹出，战斗页不再显示感言区块 */}
                 {!intro && narrating && (
                     <div className="rounded-xl border border-[#AFA3A1]/70/60 bg-[#E9E8DB] px-3 py-2 text-center animate-pulse">
                         <span className="text-xs font-bold text-slate-700">{meta.narrationBannerText || NARRATION_BANNER_DEFAULT}</span>
-                        <span className="text-[10px] text-slate-500 ml-2">正在请求战后感言…（切走也会继续，回来就能看到）</span>
-                    </div>
-                )}
-                {/* 战后 AI 播报（败方评价 + 胜方回复） */}
-                {done && arena.record.narration && (
-                    <div className="rounded-2xl border border-[#AFA3A1]/50 bg-[#E9E8DB] p-3 space-y-2">
-                        <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#8a8474]">战后感言</div>
-                        {arena.record.narration.split('\n').map((line, i) => (line.trim() ? (
-                            <div key={i} className="text-xs leading-relaxed text-[#3f3d36]">{line}</div>
-                        ) : null))}
+                        <span className="text-[10px] text-slate-500 ml-2">正在请求战后感言…（生成后会发到私聊，小窗自动弹出）</span>
                     </div>
                 )}
                 {/* 败者惩罚：转盘（弹窗手点）/ 赌钱（结算时自动），两个模式互不掺和 */}
@@ -2140,7 +2168,7 @@ const PetPvpApp: React.FC = () => {
                                             <input type="number" onKeyDown={e => { if (e.key !== 'Enter') return; applyGoldDelta((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ''; }} placeholder="±增减" className="w-20 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none" />
                                             <button onClick={e => { const input = e.currentTarget.previousElementSibling as HTMLInputElement; applyGoldDelta(input.value); input.value = ''; }}
                                                 title="确认增减金币"
-                                                className="w-7 h-7 shrink-0 rounded-lg bg-[#DAD8C0] text-[#3a3a36] text-sm font-black flex items-center justify-center active:scale-90">✓</button>
+                                                className="w-6 h-6 shrink-0 rounded-lg bg-[#DAD8C0] text-[#3a3a36] text-[13px] font-normal flex items-center justify-center active:scale-90">✓</button>
                                         </div>
                                         );
                                     })}
@@ -2202,24 +2230,27 @@ const PetPvpApp: React.FC = () => {
                             {/* ⑧ API 设置：每个调用点各自选预设，不设 = 主聊天 API；一键设为相同=用户主动点 */}
                             <div className="pt-2 border-t border-slate-100">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">API 设置（每个调用点独立，不影响群聊/私聊）</label>
-                                {/* 一键设为相同放在 8 个下拉之前——入口必须第一眼看到：以「战报播报」选中的预设统一全部调用点 */}
-                                <button onClick={async () => {
-                                    const src = meta.apiPresetIdBattle;
-                                    if (!src) { addToast('先在「战报播报」里选一个预设，再用它统一其他调用点', 'error'); return; }
-                                    const next: PetMeta = {
-                                        ...meta,
-                                        apiPresetIdGacha: src, apiPresetIdPetPick: src, apiPresetIdCheatReact: src,
-                                        apiPresetIdCheatAbort: src, apiPresetIdPunish: src, apiPresetIdPunishWinner: src, apiPresetIdRvr: src,
-                                    };
-                                    setMeta(next);
-                                    await DB.savePetMeta(next);
-                                    const ps = apiPresets.find(p => p.id === src);
-                                    addToast(`已把所有调用点统一为「${ps?.name || src}」`, 'success');
-                                }}
-                                    className="w-full py-2.5 mb-1 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm">
-                                    ☑ 一键设为相同（把下面全部调用点统一成「战报播报」选中的预设）
-                                </button>
-                                <p className="text-[9px] text-slate-400 mt-1 mb-2 leading-tight">不想挨个设就点上面：先在「战报播报」里选好一个预设，点它就全部统一；不设的调用点回落主聊天 API。</p>
+                                {/* 一键设为相同：点开直接选一个预设，8 个调用点（含战报播报）立即全部统一成它 */}
+                                <select
+                                    value=""
+                                    onChange={async e => {
+                                        const src = e.target.value;
+                                        if (!src) return;
+                                        const next: PetMeta = {
+                                            ...meta,
+                                            apiPresetIdGacha: src, apiPresetIdBattle: src, apiPresetIdPetPick: src, apiPresetIdCheatReact: src,
+                                            apiPresetIdCheatAbort: src, apiPresetIdPunish: src, apiPresetIdPunishWinner: src, apiPresetIdRvr: src,
+                                        };
+                                        setMeta(next);
+                                        await DB.savePetMeta(next);
+                                        const ps = apiPresets.find(p => p.id === src);
+                                        addToast(`已把全部 8 个调用点统一为「${ps?.name || src}」`, 'success');
+                                    }}
+                                    className="w-full py-2.5 mb-1 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm outline-none">
+                                    <option value="">☑ 一键设为相同（点这里选一个预设，下面全部调用点统一成它）</option>
+                                    {apiPresets.map(ps => <option key={ps.id} value={ps.id}>统一为：{ps.name}（{ps.config.model || '默认模型'}）</option>)}
+                                </select>
+                                <p className="text-[9px] text-slate-400 mt-1 mb-2 leading-tight">不想挨个设就点上面选一个：选完全部调用点立即统一；不设的调用点回落主聊天 API。</p>
                                 {([
                                     ['apiPresetIdGacha', '抽卡评价'],
                                     ['apiPresetIdBattle', '战报播报（导演/轮调）'],
