@@ -1895,15 +1895,16 @@ const PetPvpApp: React.FC = () => {
                                                         ? <span>{coins > shown ? `前 ${shown} 枚 · ` : ''}正面 {introCheat.heads}/{coins} 枚——{introCheat.text}</span>
                                                         : <span className="flex items-center gap-1.5"><IcoCoin className="w-3.5 h-3.5 animate-spin" /> {coins} 枚硬币转起来了…</span>}
                                                 </div>
-                                                <div className="grid grid-cols-5 gap-1.5 justify-items-center py-1">
+                                                <div className="grid grid-cols-5 gap-1 justify-items-center py-1">
                                                     {results.map((isHead, i) => (
+                                                        // 纯字符硬币：无底色圆底，●（正面）用主字色、◌（反面）用浅字色；大小 ≈ 弹窗正文两号
                                                         <span key={i}
-                                                            className={`inline-flex items-center justify-center w-[1.15rem] h-[1.15rem] rounded-full text-[11px] font-black leading-none
+                                                            className={`leading-none font-black select-none
                                                                 ${settled
                                                                     ? isHead
-                                                                        ? 'bg-[#DAD8C0] text-[#3a3a36]'
-                                                                        : 'bg-[#F9FBF5] text-[#8a8474]'
-                                                                    : 'bg-[#F9FBF5] text-[#8a8474] animate-pulse'}`}>
+                                                                        ? 'text-[22px] text-[#3a3a36]'
+                                                                        : 'text-[22px] text-[#8a8474]'
+                                                                    : 'text-[22px] text-[#8a8474] animate-pulse'}`}>
                                                             {settled ? (isHead ? '●' : '◌') : '◍'}
                                                         </span>
                                                     ))}
@@ -2123,20 +2124,28 @@ const PetPvpApp: React.FC = () => {
                             <div>
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">调整每人的金币</label>
                                 <div className="space-y-2">
-                                    {participants.map(p => (
+                                    {participants.map(p => {
+                                        // 手机没回车键：±输入配一颗 ✓ 确认按钮，点了才结算（逻辑与回车一致）
+                                        const applyGoldDelta = (raw: string) => {
+                                            const v = parseInt(raw);
+                                            if (isNaN(v)) { addToast('先输入要加减的数字', 'error'); return; }
+                                            setGoldOf(p.id, Math.max(0, goldOf(p.id) + v));
+                                            addToast(`${p.name} 金币 ${v >= 0 ? '+' : ''}${v}`, 'success');
+                                        };
+                                        return (
                                         <div key={p.id} className="flex items-center gap-2">
                                             <TokenImg value={p.avatar} className="w-7 h-7 rounded-full object-cover" />
                                             <span className="text-xs font-bold text-slate-600 flex-1 truncate">{p.name}</span>
                                             <span className="text-xs font-bold text-slate-600 tabular-nums flex items-center gap-0.5"><IcoCoin className="w-3.5 h-3.5" /> {goldOf(p.id)}</span>
-                                            <input type="number" onKeyDown={e => {
-                                                if (e.key !== 'Enter') return;
-                                                const v = parseInt((e.target as HTMLInputElement).value);
-                                                if (!isNaN(v)) { setGoldOf(p.id, Math.max(0, goldOf(p.id) + v)); (e.target as HTMLInputElement).value = ''; addToast(`${p.name} 金币 ${v >= 0 ? '+' : ''}${v}`, 'success'); }
-                                            }} placeholder="±增减" className="w-20 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none" />
+                                            <input type="number" onKeyDown={e => { if (e.key !== 'Enter') return; applyGoldDelta((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ''; }} placeholder="±增减" className="w-20 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none" />
+                                            <button onClick={e => { const input = e.currentTarget.previousElementSibling as HTMLInputElement; applyGoldDelta(input.value); input.value = ''; }}
+                                                title="确认增减金币"
+                                                className="w-7 h-7 shrink-0 rounded-lg bg-[#DAD8C0] text-[#3a3a36] text-sm font-black flex items-center justify-center active:scale-90">✓</button>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
-                                <p className="text-[9px] text-slate-400 mt-1">输入正负数回车 = 增减金币。</p>
+                                <p className="text-[9px] text-slate-400 mt-1">输入正负数点 ✓（或按回车）= 增减金币。</p>
                             </div>
                             {/* 抽卡动画 */}
                             <div className="pt-2 border-t border-slate-100">
@@ -2193,6 +2202,24 @@ const PetPvpApp: React.FC = () => {
                             {/* ⑧ API 设置：每个调用点各自选预设，不设 = 主聊天 API；一键设为相同=用户主动点 */}
                             <div className="pt-2 border-t border-slate-100">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">API 设置（每个调用点独立，不影响群聊/私聊）</label>
+                                {/* 一键设为相同放在 8 个下拉之前——入口必须第一眼看到：以「战报播报」选中的预设统一全部调用点 */}
+                                <button onClick={async () => {
+                                    const src = meta.apiPresetIdBattle;
+                                    if (!src) { addToast('先在「战报播报」里选一个预设，再用它统一其他调用点', 'error'); return; }
+                                    const next: PetMeta = {
+                                        ...meta,
+                                        apiPresetIdGacha: src, apiPresetIdPetPick: src, apiPresetIdCheatReact: src,
+                                        apiPresetIdCheatAbort: src, apiPresetIdPunish: src, apiPresetIdPunishWinner: src, apiPresetIdRvr: src,
+                                    };
+                                    setMeta(next);
+                                    await DB.savePetMeta(next);
+                                    const ps = apiPresets.find(p => p.id === src);
+                                    addToast(`已把所有调用点统一为「${ps?.name || src}」`, 'success');
+                                }}
+                                    className="w-full py-2.5 mb-1 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm">
+                                    ☑ 一键设为相同（把下面全部调用点统一成「战报播报」选中的预设）
+                                </button>
+                                <p className="text-[9px] text-slate-400 mt-1 mb-2 leading-tight">不想挨个设就点上面：先在「战报播报」里选好一个预设，点它就全部统一；不设的调用点回落主聊天 API。</p>
                                 {([
                                     ['apiPresetIdGacha', '抽卡评价'],
                                     ['apiPresetIdBattle', '战报播报（导演/轮调）'],
@@ -2215,24 +2242,6 @@ const PetPvpApp: React.FC = () => {
                                     </div>
                                     );
                                 })}
-                                {/* 一键设为相同：以「战报播报」的预设为准统一全部调用点（用户主动点才生效） */}
-                                <button onClick={async () => {
-                                    const src = meta.apiPresetIdBattle;
-                                    if (!src) { addToast('先在「战报播报」里选一个预设，再用它统一其他调用点', 'error'); return; }
-                                    const next: PetMeta = {
-                                        ...meta,
-                                        apiPresetIdGacha: src, apiPresetIdPetPick: src, apiPresetIdCheatReact: src,
-                                        apiPresetIdCheatAbort: src, apiPresetIdPunish: src, apiPresetIdPunishWinner: src, apiPresetIdRvr: src,
-                                    };
-                                    setMeta(next);
-                                    await DB.savePetMeta(next);
-                                    const ps = apiPresets.find(p => p.id === src);
-                                    addToast(`已把所有调用点统一为「${ps?.name || src}」`, 'success');
-                                }}
-                                    className="w-full py-1.5 rounded-lg border border-[#AFA3A1]/70 text-slate-500 text-[10px] font-bold">
-                                    一键设为相同（以「战报播报」选中的预设统一全部调用点）
-                                </button>
-                                <p className="text-[9px] text-slate-400 mt-1">不设的调用点回落主聊天 API；「一键」只在你主动点的时候生效。</p>
                             </div>
                             {/* 提示词发送顺序可视化 + 编辑 */}
                             <div className="pt-2 border-t border-slate-100">
