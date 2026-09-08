@@ -236,11 +236,17 @@ const petMemFrag = (line: string) => {
         mood: 'rec' as const,
     };
 };
-// 就地追加一句到 char.memories（老存档是纯字符串的保留字符串追加，避免混型）
+// 就地追加一句到 char.memories（老存档是纯字符串的保留字符串追加，避免混型）。
+// 同时把当月写进 activeMemoryMonths：主聊天的详细记忆段按激活月份过滤，
+// 不激活的话对战记忆永远进不了 system prompt——表现为「打完游戏别处问就不记得」。
 const pushMemLine = (char: any, line: string) => {
     const raw = char.memories;
     if (Array.isArray(raw)) char.memories = [...raw.slice(-29), petMemFrag(line)];
     else char.memories = [...String(raw || '').split('\n').slice(-29), line];
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const cur = Array.isArray(char.activeMemoryMonths) ? char.activeMemoryMonths : [];
+    if (!cur.includes(monthKey)) char.activeMemoryMonths = [...cur, monthKey];
 };
 
 const PetPvpApp: React.FC = () => {
@@ -670,7 +676,7 @@ const PetPvpApp: React.FC = () => {
                 const char = characters.find(c => c.id === cid) as any;
                 if (!char) continue;
                 pushMemLine(char, oneLiner);
-                updateCharacter(cid, { memories: char.memories });
+                updateCharacter(cid, { memories: char.memories, activeMemoryMonths: char.activeMemoryMonths });
             }
             b.memorySaved = true;
             await DB.savePetBattle(b);
@@ -762,7 +768,7 @@ const PetPvpApp: React.FC = () => {
         const char = characters.find(c => c.id === target) as any;
         if (!char) return;
         pushMemLine(char, line);
-        updateCharacter(target, { memories: char.memories });
+        updateCharacter(target, { memories: char.memories, activeMemoryMonths: char.activeMemoryMonths });
     };
 
     // 回放结束 → ①按最终胜负结算（删败方宠物 + 押注派彩，出千可能翻转结果）②调 API 生成「败方评价 + 胜方回复」
@@ -798,7 +804,7 @@ const PetPvpApp: React.FC = () => {
                         const char = characters.find(c => c.id === cid) as any;
                         if (!char) continue;
                         pushMemLine(char, oneLiner);
-                        updateCharacter(cid, { memories: char.memories });
+                        updateCharacter(cid, { memories: char.memories, activeMemoryMonths: char.activeMemoryMonths });
                     }
                     (record as any).memorySaved = true;
                     await DB.savePetBattle(record);
@@ -1182,15 +1188,15 @@ const PetPvpApp: React.FC = () => {
                     <div className="flex items-center gap-1.5">
                         <span className="text-[10px] font-black text-slate-600 tabular-nums">{hpNow}</span>
                         <div className="flex-1 h-3.5 bg-slate-300/70 rounded-full overflow-hidden border border-slate-400/30">
-                            <div className={`h-full rounded-full transition-all duration-500 ${pct > 50 ? 'bg-slate-800' : pct > 20 ? 'bg-slate-500' : 'bg-slate-300'}`}
+                            <div className={`h-full rounded-full transition-all duration-500 ${pct > 50 ? 'bg-[#AFA3A1]' : pct > 20 ? 'bg-[#DAD8C0]' : 'bg-[#E9E8DB]'}`}
                                 style={{ width: `${pct}%`, marginLeft: side === 'b' ? 'auto' : undefined }} />
                         </div>
                     </div>
                     {/* 竖版宠物卡 */}
                     <div className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 ${
-                        isHurt ? 'border-slate-800 bg-slate-100'
-                            : isAttacking ? 'border-slate-500 bg-slate-100 scale-[1.02] shadow-lg shadow-slate-200'
-                            : 'border-slate-400/30 bg-slate-100'
+                        isHurt ? 'border-[#AFA3A1] bg-[#E9E8DB]'
+                            : isAttacking ? 'border-[#DAD8C0] bg-[#F9FBF5] scale-[1.02] shadow-lg shadow-[#DAD8C0]/50'
+                            : 'border-[#AFA3A1]/30 bg-[#F9FBF5]'
                     }`}>
                         <div className="px-2 pt-2 pb-1 text-center">
                             <div className="text-[11px] font-bold text-slate-600 truncate">{c.charName}</div>
@@ -1393,7 +1399,7 @@ const PetPvpApp: React.FC = () => {
                             </div>
                         )}
                         <button onClick={() => { setResultModal(null); setBatchResults(null); }}
-                            className="w-full mt-3 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold active:scale-[0.98]">确定</button>
+                            className="w-full mt-3 py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-sm font-bold active:scale-[0.98]">确定</button>
                     </div>
                 </div>
             )}
@@ -1412,7 +1418,7 @@ const PetPvpApp: React.FC = () => {
                                         if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
                                         return next;
                                     })}
-                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left ${on ? 'border-slate-800 bg-slate-100' : 'border-slate-200'}`}>
+                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left ${on ? 'border-[#AFA3A1] bg-[#E9E8DB]' : 'border-slate-200'}`}>
                                         <TokenImg value={p.avatar} className="w-9 h-9 rounded-full object-cover" />
                                         <div className="flex-1 min-w-0">
                                             <div className="text-xs font-bold text-slate-700 truncate">{p.name}</div>
@@ -1427,7 +1433,7 @@ const PetPvpApp: React.FC = () => {
                             <button onClick={() => setGachaMultiIds(new Set())}
                                 className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-500 text-xs font-bold">全不选</button>
                             <button onClick={() => { setGachaMultiMode(true); setGachaAddOpen(false); addToast(`已选 ${gachaMultiIds.size} 位角色`, 'success'); }}
-                                className="flex-1 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">加入抽奖名单</button>
+                                className="flex-1 py-2 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold">加入抽奖名单</button>
                         </div>
                     </div>
                 </div>
@@ -1449,7 +1455,7 @@ const PetPvpApp: React.FC = () => {
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => startWithCheat(true)} className="py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold active:scale-[0.98] shadow-sm">
+                                <button onClick={() => startWithCheat(true)} className="py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm">
                                     出千
                                 </button>
                                 <button onClick={() => startWithCheat(false)} className="py-2.5 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">
@@ -1467,7 +1473,7 @@ const PetPvpApp: React.FC = () => {
                 const items = wheelItemsActive();
                 const loserName = charNameOf(wheelModal.loserCharId);
                 const total = items.reduce((s, i) => s + (i.weight || 0), 0) || 1;
-                const PALETTE = ['#cbd5e1', '#f1f5f9', '#94a3b8', '#e2e8f0'];
+                const PALETTE = ['#DAD8C0', '#F9FBF5', '#AFA3A1', '#E9E8DB'];
                 let segStart = 0;
                 const stops: string[] = [];
                 const labels: Array<{ text: string; angle: number }> = [];
@@ -1507,7 +1513,7 @@ const PetPvpApp: React.FC = () => {
                             )}
                             {!wheelSpun && (
                                 <button onClick={runWheelSpin} disabled={items.length === 0}
-                                    className="w-full mt-3 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold active:scale-[0.98] disabled:opacity-40">转！</button>
+                                    className="w-full mt-3 py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-sm font-bold active:scale-[0.98] disabled:opacity-40">转！</button>
                             )}
                             <button onClick={() => setWheelModal(null)} className={`w-full py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold ${wheelSpun ? 'mt-2' : 'mt-2'}`}>{wheelSpun ? '关闭（请求后台继续）' : '关闭'}</button>
                         </div>
@@ -1539,7 +1545,7 @@ const PetPvpApp: React.FC = () => {
                                     <input type="number" min={1} value={tplWeight} onChange={e => setTplWeight(parseInt(e.target.value) || 1)} className="w-16 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none" />
                                 </div>
                             </div>
-                            <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold active:scale-[0.98]">加入池子</button>
+                            <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-sm font-bold active:scale-[0.98]">加入池子</button>
                             {templates.length > 0 && (
                                 <div className="space-y-2 pt-2 border-t border-slate-100">
                                     {templates.map(t => (
@@ -1664,8 +1670,8 @@ const PetPvpApp: React.FC = () => {
                                     <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-slate-500">世界书 + 过往记忆 + 角色人设 <span className="font-normal text-slate-400">（自动带入，无需编辑）</span></div>
                                     <div className="text-center text-slate-300">↓</div>
                                     <div className="flex gap-1.5">
-                                        <button onClick={() => setPromptTab('gacha')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'gacha' ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>抽卡提示词</button>
-                                        <button onClick={() => setPromptTab('battle')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'battle' ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>战报提示词</button>
+                                        <button onClick={() => setPromptTab('gacha')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'gacha' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>抽卡提示词</button>
+                                        <button onClick={() => setPromptTab('battle')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'battle' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>战报提示词</button>
                                     </div>
                                     {promptTab === 'gacha' ? (
                                         <div className="space-y-1.5">
@@ -1684,8 +1690,8 @@ const PetPvpApp: React.FC = () => {
                                     )}
                                     <div className="text-center text-slate-300">↓</div>
                                     <div className="flex gap-1.5">
-                                        <button onClick={() => setPromptTab('punish')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'punish' ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>轮盘惩罚提示词</button>
-                                        <button onClick={() => setPromptTab('bet')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'bet' ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>赌钱压金提示词</button>
+                                        <button onClick={() => setPromptTab('punish')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'punish' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>轮盘惩罚提示词</button>
+                                        <button onClick={() => setPromptTab('bet')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'bet' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>赌钱压金提示词</button>
                                     </div>
                                     {promptTab === 'punish' && (
                                         <div className="space-y-1.5">
@@ -1833,7 +1839,7 @@ const PetPvpApp: React.FC = () => {
                 <div className="flex gap-1 px-4 pb-2">
                     {([['gacha', '抽奖'], ['pets', '宠物列表'], ['battle', '对战'], ['stats', '战绩']] as Array<[Tab, string]>).map(([id, label]) => (
                         <button key={id} onClick={() => setTab(id as Tab)}
-                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${tab === id ? 'bg-slate-900 text-white shadow' : 'bg-slate-100 text-slate-500'}`}>
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${tab === id ? 'bg-[#DAD8C0] text-[#3a3a36] shadow' : 'bg-[#E9E8DB] text-[#6b6963]'}`}>
                             {label}
                         </button>
                     ))}
@@ -1848,7 +1854,7 @@ const PetPvpApp: React.FC = () => {
                             <div className="flex items-center justify-between mb-2">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">谁去抽奖（你也能抽）</label>
                                 <button onClick={() => setGachaMultiMode(m => !m)}
-                                    className={`px-2 py-1 rounded-lg text-[10px] font-bold border ${gachaMultiMode ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-400'}`}>
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-bold border ${gachaMultiMode ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-400'}`}>
                                         {gachaMultiMode ? <span className="flex items-center justify-center gap-1">批量模式 <IcoCheck className="w-3 h-3" /></span> : '批量模式'}
                                 </button>
                             </div>
@@ -1869,7 +1875,7 @@ const PetPvpApp: React.FC = () => {
                                                 if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
                                                 return next;
                                             })}
-                                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-full border text-[11px] font-bold ${on ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>
+                                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-full border text-[11px] font-bold ${on ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>
                                                 <TokenImg value={p.avatar} className="w-5 h-5 rounded-full object-cover" />
                                                 {p.name}{on && <IcoCheck className="w-3 h-3" />}
                                             </button>
@@ -1882,11 +1888,11 @@ const PetPvpApp: React.FC = () => {
                                 className="w-full mt-2 py-1.5 rounded-lg border border-dashed border-slate-300 text-slate-400 text-[10px] font-bold">＋ 添加抽卡角色（通讯录选人，可多选）</button>
                             <div className="flex gap-2 mt-3">
                                 <button onClick={() => doGacha(1)} disabled={drawing}
-                                    className={`flex-1 py-3 rounded-2xl font-bold text-white text-sm transition-all ${drawing ? 'bg-slate-300' : 'bg-slate-900 active:scale-[0.98]'}`}>
+                                    className={`flex-1 py-3 rounded-2xl font-bold text-white text-sm transition-all ${drawing ? 'bg-slate-300' : 'bg-[#DAD8C0] text-[#3a3a36] active:scale-[0.98]'}`}>
                                     单抽（{GACHA_COST} 金币{gachaMultiMode ? '/人' : ''}）
                                 </button>
                                 <button onClick={() => doGacha(10)} disabled={drawing}
-                                    className={`flex-1 py-3 rounded-2xl font-bold text-white text-sm transition-all ${drawing ? 'bg-slate-300' : 'bg-slate-900 active:scale-[0.98]'}`}>
+                                    className={`flex-1 py-3 rounded-2xl font-bold text-white text-sm transition-all ${drawing ? 'bg-slate-300' : 'bg-[#DAD8C0] text-[#3a3a36] active:scale-[0.98]'}`}>
                                     十连抽（{GACHA_COST * 10} 金币{gachaMultiMode ? '/人' : ''}）
                                 </button>
                             </div>
@@ -1955,7 +1961,7 @@ const PetPvpApp: React.FC = () => {
                                                         <div className="text-xs font-bold text-slate-700 truncate">
                                                             {pet.name}
                                                             <span className={`ml-1 text-[9px] font-bold px-1 py-0.5 rounded border ${GRADE_COLORS[pet.grade]}`}>{pet.grade}</span>
-                                                            {isDefault && <span className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded bg-slate-900 text-white">默认出战</span>}
+                                                            {isDefault && <span className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded bg-[#DAD8C0] text-[#3a3a36]">默认出战</span>}
                                                         </div>
                                                         <div className="text-[9px] text-slate-400 flex items-center gap-1.5">
                                                             <span className="flex items-center gap-0.5"><IcoHeart className="w-2.5 h-2.5" />{pet.hp}</span>
@@ -2023,7 +2029,7 @@ const PetPvpApp: React.FC = () => {
                                     <div className="flex gap-2 items-center">
                                         {(['a', 'b', null] as Array<'a' | 'b' | null>).map(s => (
                                             <button key={String(s)} onClick={() => setBetSide(s)}
-                                                className={`flex-1 py-2 rounded-xl text-[10px] font-bold border transition-all ${betSide === s ? 'border-slate-800 bg-slate-100 text-slate-800' : 'border-slate-200 text-slate-500'}`}>
+                                                className={`flex-1 py-2 rounded-xl text-[10px] font-bold border transition-all ${betSide === s ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-slate-200 text-slate-500'}`}>
                                                 {s === 'a' ? '押 A 赢' : s === 'b' ? (mode === 'avb' ? '押 B 赢' : '押对手赢') : '不押注'}
                                             </button>
                                         ))}
@@ -2036,7 +2042,7 @@ const PetPvpApp: React.FC = () => {
                                 </div>
                             )}
                             <button onClick={startBattle} disabled={battling}
-                                className={`w-full py-3 rounded-2xl font-bold text-white transition-all ${battling ? 'bg-slate-300' : 'bg-slate-900 active:scale-[0.98]'}`}>
+                                className={`w-full py-3 rounded-2xl font-bold transition-all ${battling ? 'bg-slate-300 text-slate-500' : 'bg-[#DAD8C0] text-[#3a3a36] active:scale-[0.98]'}`}>
                                 {battling ? '战斗结算中…' : mode === 'rvr'
                                     ? <span className="flex items-center justify-center gap-1.5"><IcoDice className="w-4 h-4" /> 随机匹配</span>
                                     : <span className="flex items-center justify-center gap-1.5"><IcoSwords className="w-4 h-4" /> 开始对战</span>}
