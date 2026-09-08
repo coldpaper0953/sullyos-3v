@@ -59,6 +59,14 @@ const PROMPT_PUNISH_DEFAULT = `{人设}
 
 请用你自己的口吻，对接受这个惩罚做出回应（一两句话，40 字以内），直接输出回应本身，不要输出其他内容。`;
 
+// user 败时的镜像提示词：胜者 NPC 以赢家身份来私聊「监督你执行惩罚」——
+// 转盘惩罚的记忆写在胜者名下，那条私聊也由胜者发出，链路才完整（红点/小窗/资料三处都有痕迹）。
+const PROMPT_PUNISH_WINNER_DEFAULT = `{人设}
+
+你刚刚在宠物对战中赢了 {输家}，对方转盘抽到了惩罚：「{惩罚}」，这条惩罚的记忆你已经记下了。
+
+请用你自己的口吻给 {输家} 发一条私聊（一两句话，40 字以内）：围观/调侃/督促对方执行惩罚都行，直接输出消息本身，不要输出其他内容。`;
+
 const PROMPT_RVR_TALK_DEFAULT = `{人设}
 
 刚刚你和 {对方主人} 打了一场宠物对战：{结果}（对方出场：{对方主人} 的「{对方宠物}」）。
@@ -615,20 +623,45 @@ const PetPvpApp: React.FC = () => {
     };
 
     // ─── 对战 ───
-    // 品级匹配挑宠（脚本匹配，尽量同级）：每方出自己拥有的最高品级那只——
-    // 双方都有 A → A对A；一方没有 A → 那方自动降级出自己的最高档（A对B 以此类推）。
-    // 同档多只时默认出战的宠物优先，其次最早抽的。默认出战指定不再跨档生效（防 S 级打 C 级悬殊局）。
+    // 品级匹配挑宠（以 user 为基准）：
+    // · user 参战 → user 可选「默认出战」那只（没设默认就出最高品级），
+    //   NPC 出与 user 宠物同品级的那只（同档多只取最早抽的）；NPC 没有该档
+    //   就取最接近的档（从user档往上找、再往下找），保证对手尽量同级。
+    // · NPC 互打（rvr）→ 各出自己最高品级（A对A，没A自动降A对B 以此类推）。
+    // · NPC 的「默认出战」指定不再影响对战（只有 user 有选择权）。
     const GRADE_ORDER: PetGrade[] = ['A', 'B', 'C', 'D', 'E'];
+    const userPickPet = (): Pet | null => {
+        const list = aliveByChar('user').slice().sort((a, b) => a.createdAt - b.createdAt);
+        if (!list.length) return null;
+        const defId = meta.defaultPetByChar?.['user'];
+        return list.find(p => p.id === defId) || list.find(p => p.grade === (GRADE_ORDER.find(g => list.some(x => x.grade === g)) || 'E')) || list[0];
+    };
+    const matchGradePet = (charId: string, targetGrade: PetGrade): Pet | null => {
+        const list = aliveByChar(charId).slice().sort((a, b) => a.createdAt - b.createdAt);
+        if (!list.length) return null;
+        const idx = GRADE_ORDER.indexOf(targetGrade);
+        // 先往低档找（user A 级、NPC 没 A 但有 B → B 上），再往高档找（user E 级、NPC 最低 D → D 上）
+        const order = [...GRADE_ORDER.slice(idx), ...GRADE_ORDER.slice(0, idx).reverse()];
+        const g = order.find(gr => list.some(p => p.grade === gr));
+        return g ? list.find(p => p.grade === g) || null : null;
+    };
     const gradePickPet = (charId: string): Pet | null => {
         const list = aliveByChar(charId).slice().sort((a, b) => a.createdAt - b.createdAt);
         if (!list.length) return null;
         const best = GRADE_ORDER.find(g => list.some(p => p.grade === g)) || 'E';
-        const inGrade = list.filter(p => p.grade === best);
-        const defId = meta.defaultPetByChar?.[charId];
-        return inGrade.find(p => p.id === defId) || inGrade[0];
+        return list.find(p => p.grade === best) || list[0];
     };
-    const combatantOf = (charId: string): PetCombatant | null => {
-        const pet = gradePickPet(charId);
+    // 对战出阵总入口：user 参战 → 以 user 出战宠的品级为基准，NPC 就近匹配同档；
+    // NPC 互打 → 各出最高档。UI 预览与实战共用这里，保证「所见即所打」。
+    const battlePetOf = (charId: string, userInBattle: boolean, userGrade?: PetGrade): Pet | null => {
+        if (userInBattle) {
+            if (charId === 'user') return userPickPet();
+            return matchGradePet(charId, userGrade || (userPickPet()?.grade as PetGrade) || 'E');
+        }
+        return gradePickPet(charId);
+    };
+    const combatantOf = (charId: string, userInBattle = false, userGrade?: PetGrade): PetCombatant | null => {
+        const pet = battlePetOf(charId, userInBattle, userGrade);
         if (!pet) return null;
         return buildCombatant(pet, charId, charNameOf(charId), meta.totalStatPoints);
     };
@@ -650,19 +683,23 @@ const PetPvpApp: React.FC = () => {
             if (mode === 'avs' && !bId) bId = pickRandomCharWithPet(aId);
         }
         if (aId === bId) { addToast('两边不能是同一个角色', 'error'); return null; }
+        // user 是否参战（决定品级基准：user 在 → NPC 按 user 宠物档就近匹配；不在 → NPC 各出最高档）
+        const userIn = aId === 'user' || bId === 'user';
+        const userPet = userIn ? userPickPet() : null;
+        const userGrade = (userPet?.grade as PetGrade) || 'E';
         // 自动兜底：任一方没有活宠物 → 从有宠物的人里补位（rand 模式/用户没宠物时都能开战）
-        if (!combatantOf(aId)) {
-            const alt = owners.find(id => id !== bId && combatantOf(id));
+        if (!combatantOf(aId, userIn, userGrade)) {
+            const alt = owners.find(id => id !== bId && combatantOf(id, userIn, userGrade));
             if (!alt) { addToast('没有任何角色有活宠物，先去抽奖', 'error'); return null; }
             aId = alt;
         }
-        if (!combatantOf(bId) || bId === aId) {
-            const alt = owners.find(id => id !== aId && combatantOf(id));
+        if (!combatantOf(bId, userIn, userGrade) || bId === aId) {
+            const alt = owners.find(id => id !== aId && combatantOf(id, userIn, userGrade));
             if (!alt) { addToast('没有第二个有宠物的角色，先去抽奖', 'error'); return null; }
             bId = alt;
         }
-        const a = combatantOf(aId);
-        const b = combatantOf(bId);
+        const a = combatantOf(aId, userIn, userGrade);
+        const b = combatantOf(bId, userIn, userGrade);
         if (!a || !b) return null;
         return [a, b];
     };
@@ -1103,48 +1140,53 @@ const PetPvpApp: React.FC = () => {
         setWheelSpun({ text: picked.text, memSaved: true });
         setPunishResult({ text: picked.text, memSaved: true });
         const memOwner = loserCharId !== 'user' ? loserCharId : winnerCharId;
-        addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（回应将发到私聊）' : '（已写进对手记忆）'}`, 'success');
-        // 角色败者 → 生成回应并发进私聊（请求横幅 = 私聊同款 ChatBroadcast；弹窗随时可关，请求后台继续）
-        if (loserCharId !== 'user') {
-            const loserName = charNameOf(loserCharId);
-            announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: loserCharId, charName: loserName });
-            (async () => {
-                let reaction = '';
-                try {
-                    const persona = await buildCharPrompt(loserCharId);
-                    const prompt = (meta.promptPunish || PROMPT_PUNISH_DEFAULT)
+        addToast(`惩罚生效：${picked.text}${loserCharId !== 'user' ? '（回应将发到私聊）' : '（对手正来私聊围观你受罚）'}`, 'success');
+        // NPC 败 → NPC 自己认罚回应；user 败 → 胜者 NPC 来私聊围观/督促（两条路都落库私聊，
+        // 资料里看得到、红点亮、小窗自动弹——这才是「转盘后的调用信息」该出现的地方）
+        const speakerCharId = loserCharId !== 'user' ? loserCharId : winnerCharId;
+        const speakerName = charNameOf(speakerCharId);
+        announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: speakerCharId, charName: speakerName });
+        (async () => {
+            let reaction = '';
+            try {
+                const persona = await buildCharPrompt(speakerCharId);
+                const prompt = loserCharId !== 'user'
+                    ? (meta.promptPunish || PROMPT_PUNISH_DEFAULT)
                         .split('{人设}').join(persona)
                         .split('{惩罚}').join(picked.text)
-                        .split('{赢家}').join(charNameOf(winnerCharId));
-                    const cfg = pickModel('battle');
-                    const data = await safeFetchJson(
-                        `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-                            body: JSON.stringify({
-                                model: cfg.model,
-                                messages: [
-                                    { role: 'system', content: prompt },
-                                    { role: 'user', content: '认罚吧。' },
-                                ],
-                                temperature: 0.9, max_tokens: 1024, stream: false,
-                            }),
-                        },
-                        1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
-                    );
-                    const d2 = await data;
-                    reaction = extractContent(d2).slice(0, 200);
-                } catch { /* 回应失败不影响惩罚本身 */ }
-                if (reaction) {
-                    await DB.saveMessage({ charId: loserCharId, role: 'assistant', type: 'text', content: reaction });
-                    announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: loserCharId, charName: loserName });
-                    // 落库即拉起小窗（MiniChatWindow 监听这个事件；点红点才是通讯录列表）
-                    window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: loserCharId } }));
-                }
-                announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: loserCharId, charName: loserName });
-            })();
-        }
+                        .split('{赢家}').join(charNameOf(winnerCharId))
+                    : (meta.promptPunishWinner || PROMPT_PUNISH_WINNER_DEFAULT)
+                        .split('{人设}').join(persona)
+                        .split('{惩罚}').join(picked.text)
+                        .split('{输家}').join(userProfile.name || 'User');
+                const cfg = pickModel('battle');
+                const data = await safeFetchJson(
+                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                        body: JSON.stringify({
+                            model: cfg.model,
+                            messages: [
+                                { role: 'system', content: prompt },
+                                { role: 'user', content: loserCharId !== 'user' ? '认罚吧。' : '说两句吧。' },
+                            ],
+                            temperature: 0.9, max_tokens: 1024, stream: false,
+                        }),
+                    },
+                    1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
+                );
+                const d2 = await data;
+                reaction = extractContent(d2).slice(0, 200);
+            } catch { /* 回应失败不影响惩罚本身 */ }
+            if (reaction) {
+                await DB.saveMessage({ charId: speakerCharId, role: 'assistant', type: 'text', content: reaction });
+                announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: speakerCharId, charName: speakerName });
+                // 落库即拉起小窗（MiniChatWindow 监听这个事件；点红点才是通讯录列表）
+                window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: speakerCharId } }));
+            }
+            announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: speakerCharId, charName: speakerName });
+        })();
     };
 
     // ─── 宠物形象渲染（多行点阵按容器缩放字号，等宽不歪）───
@@ -1507,7 +1549,7 @@ const PetPvpApp: React.FC = () => {
                                 <div className="mt-3 rounded-xl bg-[#E9E8DB] border border-[#AFA3A1]/70 px-3 py-2 text-center">
                                         <div className="text-xs font-bold text-slate-700 flex items-center gap-1"><IcoTarget className="w-3.5 h-3.5 shrink-0" /> {wheelSpun.text}</div>
                                     <div className="text-[9px] text-slate-500 mt-0.5">
-                                        已写进 {wheelModal.loserCharId !== 'user' ? loserName : (charNameOf(wheelModal.winnerCharId) + '（对手替你记着这场惩罚）')} 的记忆{wheelModal.loserCharId !== 'user' ? ' · 回应正在发到私聊（可随时关闭本窗口）' : ''}
+                                        已写进 {wheelModal.loserCharId !== 'user' ? loserName : (charNameOf(wheelModal.winnerCharId) + '（对手替你记着这场惩罚）')} 的记忆 · 回应正在发到私聊（可随时关闭本窗口）
                                     </div>
                                 </div>
                             )}
@@ -1699,6 +1741,10 @@ const PetPvpApp: React.FC = () => {
                                             <textarea value={meta.promptPunish || PROMPT_PUNISH_DEFAULT} onChange={async e => { const next = { ...meta, promptPunish: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={6}
                                                 className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
                                             <button onClick={async () => { const next = { ...meta, promptPunish: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认惩罚提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
+                                            <p className="text-[9px] text-slate-400 leading-tight pt-1">你（user）败时的提示词——胜者来私聊围观你受罚。占位符：{'{人设}{惩罚}{输家}'}</p>
+                                            <textarea value={meta.promptPunishWinner || PROMPT_PUNISH_WINNER_DEFAULT} onChange={async e => { const next = { ...meta, promptPunishWinner: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={6}
+                                                className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                                            <button onClick={async () => { const next = { ...meta, promptPunishWinner: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认围观提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
                                         </div>
                                     )}
                                     {promptTab === 'bet' && (
@@ -1971,14 +2017,14 @@ const PetPvpApp: React.FC = () => {
                                                             <span className="flex items-center gap-0.5"><IcoBoom className="w-2.5 h-2.5" />{pet.stats.crit}</span>
                                                         </div>
                                                     </div>
-                                                    {!isDefault && (
-                                                        <button onClick={async () => { await setDefaultPet(row.id, pet.id); addToast(`${row.name} 的默认出战改为「${pet.name}」`, 'success'); }}
-                                                            className="shrink-0 px-2 py-1 rounded-lg bg-white border border-[#AFA3A1]/40 text-[9px] font-bold text-slate-500 active:scale-95">设为默认</button>
+                                                    {!isDefault && row.id === 'user' && (
+                                                        <button onClick={async () => { await setDefaultPet('user', pet.id); addToast(`你的默认出战宠物改为「${pet.name}」（对战时你出它，对手自动匹配同级）`, 'success'); }}
+                                                            className="shrink-0 px-2 py-1 rounded-lg bg-white border border-[#AFA3A1]/40 text-[9px] font-bold text-slate-500 active:scale-95">设为我的出战</button>
                                                     )}
                                                 </div>
                                             );
                                         })}
-                                        <p className="text-[9px] text-slate-400 px-1">对战时脚本自动选各自最高品级的宠物出阵；同品级有多只时优先「默认出战」那只，它阵亡后按抽取顺序自动顺延。</p>
+                                        <p className="text-[9px] text-slate-400 px-1">对战规则：你参战时出你选的「默认出战」宠物（没选就出最高级），对手自动选同品级的那只（没有该级就取最接近的）；NPC 互打时各出最高品级。只有你能指定出战宠物。</p>
                                     </div>
                                 </details>
                             ));
@@ -1995,21 +2041,30 @@ const PetPvpApp: React.FC = () => {
                                     <button key={id} onClick={() => setMode(id)} className={`flex-1 py-1.5 rounded text-[10px] font-bold ${mode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
                                 ))}
                             </div>
-                            {/* 对阵标注（出战=各自最高品级宠物，脚本自动同级匹配） */}
+                            {/* 对阵标注（你参战=你的默认宠物为基准，对手自动同级匹配；NPC互打=各自最高级） */}
                             {mode === 'rvr' ? (
-                                            <p className="text-[11px] font-bold text-slate-500 text-center bg-[#F9FBF5] rounded-xl py-2 flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 脚本将随机匹配两位有宠物的角色</p>
-                            ) : (
+                                            <p className="text-[11px] font-bold text-slate-500 text-center bg-[#F9FBF5] rounded-xl py-2 flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 脚本将随机匹配两位有宠物的角色（各出最高品级）</p>
+                            ) : (() => {
+                                // 预览逻辑与实战 resolveSides 一致：user 参战 → NPC 按 user 出战宠档就近匹配
+                                const aId = sideAChar || 'user';
+                                const bId = mode === 'avb' ? sideBChar : pickRandomCharWithPet(aId);
+                                const userIn = aId === 'user' || bId === 'user';
+                                const ug = (userPickPet()?.grade as PetGrade) || 'E';
+                                const aName = battlePetOf(aId, userIn, ug)?.name || '自动';
+                                const bName = bId ? (battlePetOf(bId, userIn, ug)?.name || '自动') : '自动';
+                                return (
                                 <p className="text-[11px] font-bold text-slate-600 text-center bg-[#F9FBF5] rounded-xl py-2">
-                                    A方 {sideAChar ? `${charNameOf(sideAChar)}·${gradePickPet(sideAChar)?.name || '无'}` : '自动'} VS B方 {mode === 'avb' && sideBChar ? `${charNameOf(sideBChar)}·${gradePickPet(sideBChar)?.name || '无'}` : '自动'}
-                                    <span className="ml-1.5 text-[9px] font-normal text-slate-400">（出战=各自最高品级，尽量同级对打）</span>
+                                    A方 {sideAChar ? `${charNameOf(aId)}·${aName}` : '自动'} VS B方 {mode === 'avb' && sideBChar ? `${charNameOf(bId)}·${bName}` : '自动'}
+                                    <span className="ml-1.5 text-[9px] font-normal text-slate-400">{userIn ? '（你出默认宠物，对手自动选同级）' : '（各出最高品级）'}</span>
                                 </p>
-                            )}
+                                );
+                            })()}
                             {mode !== 'rvr' && (
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">A 方角色（只能选有活宠物的）</label>
                                     <select value={sideAChar} onChange={e => setSideAChar(e.target.value)} className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none">
                                         <option value="">自动选择…</option>
-                                        {participants.filter(p => aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}（出战：{gradePickPet(p.id)?.name || '无'}）</option>)}
+                                        {participants.filter(p => aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}{p.id === 'user' ? '（出战：你的默认/最高）' : ''}</option>)}
                                     </select>
                                 </div>
                             )}
@@ -2018,7 +2073,7 @@ const PetPvpApp: React.FC = () => {
                                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">B 方角色</label>
                                     <select value={sideBChar} onChange={e => setSideBChar(e.target.value)} className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none">
                                         <option value="">选择对手…</option>
-                                        {participants.filter(p => p.id !== sideAChar && aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}（出战：{gradePickPet(p.id)?.name || '无'}）</option>)}
+                                        {participants.filter(p => p.id !== sideAChar && aliveByChar(p.id).length > 0).map(p => <option key={p.id} value={p.id}>{p.name}{p.id === 'user' ? '（出战：你的默认/最高）' : ''}</option>)}
                                     </select>
                                 </div>
                             )}

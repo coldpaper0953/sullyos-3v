@@ -4262,6 +4262,7 @@ export interface PetMeta {
     apiPresetIdBattle?: string; // 战报播报专用 API 预设 id（不设 = 主聊天 API）
     battleReplyMode?: 'director' | 'roundRobin'; // 战后发言模式：导演=一次 API 整段（默认）/ roundRobin=败者胜者各调一次按序落库
     promptPunish?: string;      // 轮盘惩罚回应提示词模板（{人设}{惩罚}{赢家}）
+  promptPunishWinner?: string; // user 败时胜者围观提示词模板（{人设}{惩罚}{输家}）
     promptBetStake?: string;    // 赌钱模式压金提示词模板（{A主人}{B主人}{金额}）
     gachaCharIds?: string[];    // 批量抽奖对象（多选；含 user）——「谁去抽奖」多选态
 }
