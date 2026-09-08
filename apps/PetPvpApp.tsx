@@ -872,6 +872,19 @@ const PetPvpApp: React.FC = () => {
     // ─── ④ NPC 选宠（user 参战时）：把候选列表交给 NPC 按人设挑一只（调一次 API）───
     // 返回 { petName, line }：petName 没匹配到候选时调用方回落脚本就近匹配；line 是 20 字心声。
     // 给 AI 的 user 宠物信息只有名字和品级——NPC「看不到」对手宠物的数值底细。
+    // 思考模型防线：glm 等 reasoning 吃光 content 时回落链会拿到英文思维链——
+    // 含尖括号占位符 / 全无中文的文本一律当泄漏丢弃（宁可空缺不上屏英文）。
+    const parseCnLine = (raw: string, labels: string[]): { line: string; picks: Record<string, string> } => {
+        const text = (raw || '').replace(/<[^>]*>|<\/[^>]*>/g, '').trim();
+        const picks: Record<string, string> = {};
+        for (const label of labels) {
+            const m = text.match(new RegExp(`${label}[：:]\\s*(.+)`));
+            picks[label] = m ? m[1].trim().slice(0, 80) : '';
+        }
+        const main = picks[labels[0]] || '';
+        const hasChinese = /[\u4e00-\u9fff]/.test(main);
+        return { line: hasChinese ? main : '', picks };
+    };
     const npcPickPetByAI = async (npcCharId: string, userPet: Pet, candidates: Pet[]): Promise<{ petName: string; line: string }> => {
         const persona = await buildCharPrompt(npcCharId, sessionRef.current?.lines);
         const listTxt = candidates.map(p => `- ${p.name}（${p.grade} 级 · 攻 ${p.atk}）`).join('\n');
@@ -893,17 +906,16 @@ const PetPvpApp: React.FC = () => {
                         { role: 'system', content: prompt },
                         { role: 'user', content: '选你的出战宠物。' },
                     ],
-                    temperature: 0.9, max_tokens: 512, stream: false,
+                    temperature: 0.9, max_tokens: 2048, stream: false,
                 }),
             },
             1, 90_000, { appName: '宠物对战', purpose: 'NPC选宠' },
         );
         const d2 = await data;
         const raw = extractContent(d2);
-        const pickMatch = raw.match(/选[：:]\s*(.+)/);
-        const lineMatch = raw.match(/心声[：:]\s*(.+)/);
-        const petName = (pickMatch?.[1] || '').trim().replace(/[「」『』"']/g, '');
-        const line = (lineMatch?.[1] || '').trim().slice(0, 60);
+        const { picks } = parseCnLine(raw, ['选', '心声']);
+        const petName = (picks['选'] || '').replace(/[「」『』"']/g, '');
+        const line = (picks['心声'] || '').slice(0, 60);
         return { petName: candidates.some(p => p.name === petName) ? petName : '', line };
     };
 
@@ -1342,19 +1354,16 @@ const PetPvpApp: React.FC = () => {
                             { role: 'system', content: prompt },
                             { role: 'user', content: '说说你的看法。' },
                         ],
-                        temperature: 0.9, max_tokens: 512, stream: false,
+                        temperature: 0.9, max_tokens: 2048, stream: false,
                     }),
                 },
                 1, 90_000, { appName: '宠物对战', purpose: '出千被抓反应' },
             );
             const d2 = await data;
             const raw = extractContent(d2);
-            const m1 = raw.match(/心声[：:]\s*(.+)/);
-            const m2 = raw.match(/继续[：:]\s*(是|否)/);
-            // 占位说明被 AI 原样抄回时不显示（显示一句兜底）；其余取正文
-            const cleaned = (t: string) => /<|>|^\s*$/.test(t) ? '' : t;
-            reaction = cleaned((m1?.[1] || '').trim().slice(0, 60)) || cleaned(raw.trim().split('\n').filter((l: string) => !l.includes('继续') && !l.includes('选：')).join(' ').slice(0, 60)) || '';
-            keepGoing = !m2 || m2[1] !== '否';
+            const { picks } = parseCnLine(raw, ['心声', '继续']);
+            reaction = picks['心声'];
+            keepGoing = !picks['继续'] || !/否|N|n/.test(picks['继续']);
         } catch { /* 反应调用失败 → 默认继续打（不中断不惩罚） */ }
         const caughtLine = `${userProfile.name || 'User'} 出千失败（正面 ${heads}/${coins} 枚）被抓包，${charNameOf(npcId)} 表示${reaction || '很无语'}${keepGoing ? '，对战继续' : '，中断了这场对战'}。`;
         sessionRef.current?.lines.push(caughtLine);
@@ -1382,13 +1391,15 @@ const PetPvpApp: React.FC = () => {
                             { role: 'system', content: prompt },
                             { role: 'user', content: '说说吧。' },
                         ],
-                        temperature: 0.9, max_tokens: 512, stream: false,
+                        temperature: 0.9, max_tokens: 2048, stream: false,
                     }),
                 },
                 1, 90_000, { appName: '宠物对战', purpose: '出千中断解释' },
             );
             const d2 = await data;
-            abortMsg = extractContent(d2).slice(0, 200);
+            // 思维链泄漏防线：无中文字符的「回复」= 英文思维链截断，丢弃走中文兜底
+            const rawAbort = extractContent(d2).slice(0, 200);
+            abortMsg = /[\u4e00-\u9fff]/.test(rawAbort) ? rawAbort : '';
         } catch { /* 解释失败用兜底句 */ }
         if (!abortMsg) abortMsg = `${reaction || '出千被发现就别打了。'}这次对战到此为止。`;
         try {
@@ -1887,12 +1898,12 @@ const PetPvpApp: React.FC = () => {
                                                 <div className="grid grid-cols-5 gap-1.5 justify-items-center py-1">
                                                     {results.map((isHead, i) => (
                                                         <span key={i}
-                                                            className={`inline-flex items-center justify-center w-[1.15rem] h-[1.15rem] rounded-full text-[11px] font-black leading-none border
+                                                            className={`inline-flex items-center justify-center w-[1.15rem] h-[1.15rem] rounded-full text-[11px] font-black leading-none
                                                                 ${settled
                                                                     ? isHead
-                                                                        ? 'bg-[#DAD8C0] border-[#AFA3A1] text-[#3a3a36]'
-                                                                        : 'bg-[#F9FBF5] border-[#AFA3A1]/50 text-[#8a8474]'
-                                                                    : 'bg-[#F9FBF5] border-[#AFA3A1]/70 text-[#8a8474] animate-pulse'}`}>
+                                                                        ? 'bg-[#DAD8C0] text-[#3a3a36]'
+                                                                        : 'bg-[#F9FBF5] text-[#8a8474]'
+                                                                    : 'bg-[#F9FBF5] text-[#8a8474] animate-pulse'}`}>
                                                             {settled ? (isHead ? '●' : '◌') : '◍'}
                                                         </span>
                                                     ))}

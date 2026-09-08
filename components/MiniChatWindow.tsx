@@ -184,7 +184,10 @@ const MiniChatWindow: React.FC = () => {
                         .sully-mini-chat .sully-chat-inputbar > div { padding: 4px 6px !important; gap: 6px !important; }
                         .sully-mini-chat .sully-chat-inputbar textarea { padding: 6px 8px !important; font-size: 13px !important; max-height: 2.6rem !important; }
                         .sully-mini-chat .sully-chat-inputbar .sully-chat-panel { max-height: 9.5rem !important; }
-                        .sully-mini-chat .sully-chat-inputbar .sully-chat-panel button { display: none !important; }
+                        /* 功能面板（+号展开的按钮格）：小窗 280px 宽装不下原版 4×56px+32px 间距——等比缩小 */
+                        .sully-mini-chat .sully-chat-panel .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 8px !important; padding: 10px !important; }
+                        .sully-mini-chat .sully-chat-panel .w-14.h-14 { width: 2.5rem !important; height: 2.5rem !important; }
+                        .sully-mini-chat .sully-chat-panel .w-14.h-14 svg { width: 1.1rem !important; height: 1.1rem !important; }
                         .sully-mini-chat .sully-chat-inputbar > div > button { width: 1.75rem !important; height: 1.75rem !important; min-width: 1.75rem !important; min-height: 1.75rem !important; }
                         .sully-mini-chat .sully-chat-inputbar > div > button svg { width: 1.05rem !important; height: 1.05rem !important; }
                     `}</style>
