@@ -108,7 +108,7 @@ const MiniChatWindow: React.FC = () => {
                 <button
                     onClick={() => { setOpen(true); setView('contacts'); }}
                     title={`${totalUnread} 条未读 · 点击打开通讯录`}
-                    className="fixed left-2 top-1 z-[95] min-w-[18px] h-[18px] px-1 rounded-full bg-slate-800 text-white text-[9px] font-black shadow-md border border-white/60 flex items-center justify-center animate-pulse"
+                    className="fixed left-2 top-1 z-[95] min-w-[18px] h-[18px] px-1 rounded-full bg-[#AFA3A1] text-white text-[9px] font-black shadow-md border border-white/60 flex items-center justify-center animate-pulse"
                 >
                     {totalUnread > 99 ? '99+' : totalUnread}
                 </button>
@@ -123,42 +123,42 @@ const MiniChatWindow: React.FC = () => {
                             className="flex items-center justify-between mb-3 cursor-grab active:cursor-grabbing touch-none"
                             title="按住这里拖动弹窗"
                         >
-                            <span className="text-sm font-bold text-slate-800">未读消息（{totalUnread}）</span>
-                            <button onClick={() => { setOpen(false); setView('redDot'); }} className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center active:scale-90">
+                            <span className="text-sm font-bold text-[#3a3a36]">未读消息（{totalUnread}）</span>
+                            <button onClick={() => { setOpen(false); setView('redDot'); }} className="w-7 h-7 rounded-full bg-[#E9E8DB] text-[#8a8474] flex items-center justify-center active:scale-90">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="w-3.5 h-3.5"><path d="M6 6l12 12M18 6L6 18" /></svg>
                             </button>
                         </div>
                         <div className="space-y-2">
-                            {unreadEntries.length === 0 && <div className="text-center py-8 text-xs text-slate-400">没有未读消息</div>}
+                            {unreadEntries.length === 0 && <div className="text-center py-8 text-xs text-[#8a8474]">没有未读消息</div>}
                             {unreadEntries.map(([charId, count]) => {
                                 const c = charOf(charId);
                                 const grp = sharedGroupOf(charId);
                                 return (
-                                    <div key={charId} className="flex items-center gap-2 bg-slate-50 rounded-xl p-2">
+                                    <div key={charId} className="flex items-center gap-2 bg-[#F9FBF5] rounded-xl p-2">
                                         <TokenImg value={c?.avatar} className="w-9 h-9 rounded-full object-cover shrink-0" />
                                         <div className="flex-1 min-w-0">
-                                            <div className="text-xs font-bold text-slate-700 truncate">{c?.name || '未知联系人'}</div>
-                                            <div className="text-[10px] text-slate-500 font-bold">{count} 条新消息</div>
+                                            <div className="text-xs font-bold text-[#3a3a36] truncate">{c?.name || '未知联系人'}</div>
+                                            <div className="text-[10px] text-[#6b6963] font-bold">{count} 条新消息</div>
                                         </div>
                                         {grp && (
                                             <button onClick={() => jumpToGroup(grp.id)} title={`跳转到群聊「${grp.name}」`}
-                                                className="shrink-0 px-2 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 text-[10px] font-bold active:scale-95">
+                                                className="shrink-0 px-2 py-1.5 rounded-lg bg-[#E9E8DB] border border-[#AFA3A1]/70 text-[#3a3a36] text-[10px] font-bold active:scale-95">
                                                 群里聊
                                             </button>
                                         )}
                                         <button onClick={() => openChat(charId)} title="小窗私聊"
-                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-800 text-white text-[10px] font-bold active:scale-95">
+                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-[#DAD8C0] border border-[#AFA3A1] text-[#3a3a36] text-[10px] font-bold active:scale-95">
                                             私聊
                                         </button>
                                         <button onClick={() => clearUnread(charId)} title="忽略：清掉未读，不看内容"
-                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-400 text-[10px] font-bold active:scale-95">
+                                            className="shrink-0 px-2 py-1.5 rounded-lg bg-[#E9E8DB] border border-[#AFA3A1]/40 text-[#8a8474] text-[10px] font-bold active:scale-95">
                                             忽略
                                         </button>
                                     </div>
                                 );
                             })}
                         </div>
-                        <p className="text-[9px] text-slate-400 mt-3">和你在同一个群里的联系人会显示「群里聊」，点击直接跳到那个群。</p>
+                        <p className="text-[9px] text-[#8a8474] mt-3">和你在同一个群里的联系人会显示「群里聊」，点击直接跳到那个群。</p>
                     </div>
                 </div>
             )}
@@ -166,19 +166,19 @@ const MiniChatWindow: React.FC = () => {
             {/* 小聊天窗：功能与私聊一致，可回复；标题栏拖动（位置记忆）；关闭即已读不回 */}
             {open && view === 'chat' && (
                 <div style={{ left: pos.x, top: pos.y, touchAction: 'none' }}
-                    className="fixed z-[96] w-80 h-[26rem] max-h-[70vh] rounded-2xl overflow-hidden shadow-2xl border border-slate-200 bg-white flex flex-col animate-fade-in">
+                    className="fixed z-[96] w-80 h-[26rem] max-h-[70vh] rounded-2xl overflow-hidden shadow-2xl border border-[#AFA3A1]/50 bg-[#F9FBF5] flex flex-col animate-fade-in">
                     <div
                         onPointerDown={e => { dragOffsetRef.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }; setDragging(true); }}
                         title="按住这里拖动窗口"
-                        className={`shrink-0 px-2.5 py-1 bg-slate-50 border-b border-slate-200/70 flex items-center gap-2 touch-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                        className={`shrink-0 px-2.5 py-1 bg-[#F9FBF5] border-b border-[#AFA3A1]/30 flex items-center gap-2 touch-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
                     >
                         <button onClick={() => setView('contacts')} title="返回通讯录列表"
-                            className="w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-400 flex items-center justify-center active:scale-90">
+                            className="w-5 h-5 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="w-2.5 h-2.5"><path d="M14.5 5.5L8 12l6.5 6.5" /></svg>
                         </button>
-                        <span className="text-[11px] font-bold text-slate-600 flex-1 truncate">{charOf(targetChar)?.name || '私聊'}</span>
+                        <span className="text-[11px] font-bold text-[#3a3a36] flex-1 truncate">{charOf(targetChar)?.name || '私聊'}</span>
                         <button onClick={closeAndMarkRead} title="关闭并标记已读（已读不回）"
-                            className="w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-400 flex items-center justify-center active:scale-90">
+                            className="w-5 h-5 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="w-3 h-3"><path d="M6 6l12 12M18 6L6 18" /></svg>
                         </button>
                     </div>
