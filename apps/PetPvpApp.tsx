@@ -626,7 +626,7 @@ const PetPvpApp: React.FC = () => {
     // 品级匹配挑宠（以 user 为基准）：
     // · user 参战 → user 可选「默认出战」那只（没设默认就出最高品级），
     //   NPC 出与 user 宠物同品级的那只（同档多只取最早抽的）；NPC 没有该档
-    //   就取最接近的档（从user档往上找、再往下找），保证对手尽量同级。
+    //   就取最接近的档（先往低档找、再往高档找），保证对手尽量同级。
     // · NPC 互打（rvr）→ 各出自己最高品级（A对A，没A自动降A对B 以此类推）。
     // · NPC 的「默认出战」指定不再影响对战（只有 user 有选择权）。
     const GRADE_ORDER: PetGrade[] = ['A', 'B', 'C', 'D', 'E'];
@@ -1908,7 +1908,7 @@ const PetPvpApp: React.FC = () => {
                                 <select value={gachaCharId} onChange={e => setGachaCharId(e.target.value)} className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none">
                                     {participants.map(p => {
                                         const owned = aliveByChar(p.id).length > 0;
-                                        return <option key={p.id} value={p.id}>{p.name}{owned ? `（默认出战：${defaultPetOf(p.id)?.name || '无'}）` : ''}</option>;
+                                        return <option key={p.id} value={p.id}>{p.name}{owned ? `（已有 ${aliveByChar(p.id).length} 只宠物）` : ''}</option>;
                                     })}
                                 </select>
                             ) : (
@@ -1999,7 +1999,7 @@ const PetPvpApp: React.FC = () => {
                                     <div className="px-3 pb-3 space-y-2">
                                         {aliveByChar(row.id).length === 0 && <div className="text-[11px] text-slate-400 py-2">还没有宠物，去抽奖吧</div>}
                                         {aliveByChar(row.id).slice().sort((a, b) => a.createdAt - b.createdAt).map(pet => {
-                                            const isDefault = defaultPetOf(row.id)?.id === pet.id;
+                                            const isDefault = row.id === 'user' && defaultPetOf('user')?.id === pet.id;
                                             return (
                                                 <div key={pet.id} className={`bg-[#F9FBF5] rounded-xl p-2.5 flex items-center gap-2.5 ${isDefault ? 'ring-1 ring-[#AFA3A1]' : ''}`}>
                                                     <PetVisual pet={pet} size="w-10 h-10" boxPx={40} />
