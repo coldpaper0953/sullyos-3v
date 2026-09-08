@@ -92,7 +92,9 @@ const PROMPT_CHEAT_REACT_DEFAULT = `{人设}
 
 你自己的出战宠物是「{我方宠物}」。
 
-请从你的角度对被抓包这件事做出反应（揭发/无视/溺爱/无奈等情绪都可以，按你的人设来），并判断你要不要继续这场对战。
+被你抓包之后，{玩家} 的回应是：{玩家回应}
+
+请从你的角度对被抓包这件事和他的回应做出反应（揭发/无视/溺爱/无奈等情绪都可以，按你的人设来），并判断你要不要继续这场对战。
 输出格式（两行，照抄这个格式，不要多输出任何字）：
 心声：你的情绪反应，10 到 30 个字
 继续：是 或 否`;
@@ -353,13 +355,15 @@ const PetPvpApp: React.FC = () => {
         npcPick?: { loading?: boolean; petName?: string; line?: string };
     }>(null);
     // ③ 出千金币化的弹窗内状态机：flipping=硬币转圈动画中 / settled=硬币定格出结果、停留展示 /
-    // reacting=NPC 情绪反应调用中 / caught=被抓包、NPC 决定继续（等 user 点「继续对战」）/ aborted=NPC 中断整场（收尾已完成）
+    // choosing=被抓包、等 user 选（求情/辱骂/自定义文本，canvas 新流程）/ reacting=NPC 情绪反应调用中 /
+    // caught=NPC 决定继续（等 user 点「继续对战」）/ aborted=NPC 中断整场（收尾已完成）
     const [introCheat, setIntroCheat] = useState<null | {
-        phase: 'flipping' | 'settled' | 'reacting' | 'caught' | 'aborted';
+        phase: 'flipping' | 'settled' | 'choosing' | 'reacting' | 'caught' | 'aborted';
         coins: number; heads: number; cost: number;
         text?: string; reaction?: string; abortMsg?: string;
     }>(null);
     const [cheatCost, setCheatCost] = useState(100); // 出千投入的金币（10 的倍数；N 金币 = N/10 枚硬币）
+    const [cheatChoiceText, setCheatChoiceText] = useState(''); // choosing 阶段 user 自定义文本输入框
     // ⑨ 本局串联记忆：开战时清空，押注/选宠心声/出千反应逐条推进来——本场后续每次
     // API 调用的提示词都会带上（【本场对战进程】块），NPC「记得」本局刚发生的事
     const sessionRef = useRef<null | { lines: string[] }>(null);
@@ -1206,26 +1210,29 @@ const PetPvpApp: React.FC = () => {
                                 ? `\n\n你现在要发言了（你是${isLoser ? '败者' : '胜者'}本人），请用你自己的口吻说一两句话（40 字以内），直接输出，不要输出其他内容。`
                                 : `\n\n你现在要发言了（你是${isLoser ? '败者' : '胜者'}${speaker.charName}），请用你自己的口吻说一两句话（40 字以内），直接输出，不要输出其他内容。`);
                         const cfg = pickModel('battle');
-                        const data = await safeFetchJson(
-                            `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                            {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-                                body: JSON.stringify({
-                                    model: cfg.model,
-                                    messages: [
-                                        { role: 'system', content: persona },
-                                        { role: 'user', content: prompt },
-                                    ],
-                                    temperature: 0.9, max_tokens: 1024, stream: false,
-                                }),
-                            },
-                            1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
-                        );
-                        const d2 = await data;
-                        // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
-                        const rawCn = (extractContent(d2) || '').trim();
-                        const text = isCnLeak(rawCn) ? '' : rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
+                        let text = '';
+                        // 思维链泄漏防线：content 空被 extractContent 回落成英文思维链时重试一次（中文占比判定）
+                        for (let attempt = 0; attempt < 2 && !text; attempt++) {
+                            const data = await safeFetchJson(
+                                `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                                {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                                    body: JSON.stringify({
+                                        model: cfg.model,
+                                        messages: [
+                                            { role: 'system', content: persona },
+                                            { role: 'user', content: prompt },
+                                        ],
+                                        temperature: 0.9, max_tokens: 1024, stream: false,
+                                    }),
+                                },
+                                1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
+                            );
+                            const d2 = await data;
+                            const rawCn = (extractContent(d2) || '').trim();
+                            if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
+                        }
                         if (text) {
                             lines.push(`${speaker.charId === 'user' ? (userProfile.name || '我') : speaker.charName}：${text}`);
                             if (speaker.charId !== 'user') npcLines.push({ charId: speaker.charId, text });
@@ -1282,26 +1289,29 @@ const PetPvpApp: React.FC = () => {
                     .split('{败者角色}').join(loser.charName)
                     .split('{胜者角色}').join(winner.charName)
                     + stakeBlock;
-                const data = await safeFetchJson(
-                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-                        body: JSON.stringify({
-                            model: cfg.model,
-                            messages: [
-                                { role: 'system', content: prompt },
-                                { role: 'user', content: '请开始播报。' },
-                            ],
-                            temperature: 0.9, max_tokens: 2048, stream: false,
-                        }),
-                    },
-                    1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
-                );
-                const d2 = await data;
-                // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
-                const rawCn = (extractContent(d2) || '').trim();
-                const text = isCnLeak(rawCn) ? '' : rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '');
+                let text = '';
+                // 思维链泄漏防线：content 空被 extractContent 回落成英文思维链时重试一次（中文占比判定）
+                for (let attempt = 0; attempt < 2 && !text; attempt++) {
+                    const data = await safeFetchJson(
+                        `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                            body: JSON.stringify({
+                                model: cfg.model,
+                                messages: [
+                                    { role: 'system', content: prompt },
+                                    { role: 'user', content: '请开始播报。' },
+                                ],
+                                temperature: 0.9, max_tokens: 2048, stream: false,
+                            }),
+                        },
+                        1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
+                    );
+                    const d2 = await data;
+                    const rawCn = (extractContent(d2) || '').trim();
+                    if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '');
+                }
                 if (text) {
                     record.narration = text;
                     record.promptSent = prompt;
@@ -1365,18 +1375,39 @@ const PetPvpApp: React.FC = () => {
             await beginBattle(a, b, { buff: { side: userSide, stat, untilRound: BATTLE_MAX_ROUNDS + 1 }, text });
             return;
         }
-        // 失败（正面 <5）且必被发现 → NPC 调 API 情绪反应 + 判断是否继续
-        setIntroCheat({ phase: 'reacting', coins, heads, cost });
+        // 失败（正面 <5）且必被发现 → canvas 新流程：先弹给 user 选（求情/辱骂/自定义），
+        // 选完写入记忆，再调 API（注入出千信息+user 刚选的内容）让 NPC 按人设表态并判定继续/中断
+        setIntroCheat({ phase: 'choosing', coins, heads, cost });
+    };
+    // choosing 阶段：user 选完后 → 写记忆 → 调 API（注入 user 选项）→ NPC 判定
+    const submitCheatChoice = async (choice: 'beg' | 'curse' | 'custom', customText?: string) => {
+        if (!battleIntro || !introCheat) return;
+        const { a, b, userSide } = battleIntro;
+        const me = userSide === 'a' ? a : b;
+        const foe = userSide === 'a' ? b : a;
+        const { coins, heads, cost } = introCheat;
         const npcId = me.charId === 'user' ? foe.charId : me.charId;
+        const userName = userProfile.name || 'User';
+        // user 的选项 → 展示句 + 注入给 API 的内容（canvas：user 选项要进 NPC 的判断依据）
+        const choiceText = choice === 'beg'
+            ? `${userName} 向 ${charNameOf(npcId)} 求情：放过这次吧，下次再也不敢了。`
+            : choice === 'curse'
+                ? `${userName} 辱骂 ${charNameOf(npcId)}：小气鬼！不就出个千嘛，输了就要掀桌？`
+                : `${userName} 对 ${charNameOf(npcId)} 说：「${(customText || '').trim() || '……（沉默）'}」`;
+        // 串联记忆 + NPC 角色记忆（canvas：选项节点 → 加入记忆）
+        sessionRef.current?.lines.push(`${userName} 出千失败（正面 ${heads}/${coins} 枚）被抓包。${choiceText}`);
+        appendCharMemory(npcId, `${new Date().toLocaleDateString('zh-CN')}，${userName} 出千作弊失败被我抓包，${choice === 'beg' ? '向我求情' : choice === 'curse' ? '辱骂了我' : `对我说：「${(customText || '').trim().slice(0, 60)}」`}。`);
+        setIntroCheat({ phase: 'reacting', coins, heads, cost });
         let reaction = '';
         let keepGoing = true;
         try {
             const persona = await buildCharPrompt(npcId, sessionRef.current?.lines);
             const prompt = (meta.promptCheatReact || PROMPT_CHEAT_REACT_DEFAULT)
                 .split('{人设}').join(persona)
-                .split('{玩家}').join(userProfile.name || 'User')
+                .split('{玩家}').join(userName)
                 .split('{金额}').join(String(cost))
-                .split('{我方宠物}').join(foe.name);
+                .split('{我方宠物}').join(foe.name)
+                .split('{玩家回应}').join(choiceText);
             const cfg = pickModel('cheatReact');
             const data = await safeFetchJson(
                 `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
@@ -1944,6 +1975,31 @@ const PetPvpApp: React.FC = () => {
                                             </div>
                                         );
                                     })()}
+                                    {introCheat.phase === 'choosing' && (() => {
+                                        // canvas 新流程：被抓包 → user 选怎么回应（求情/辱骂/自定义）→ 才调 NPC 反应 API
+                                        const npcName = charNameOf(a.charId === 'user' ? b.charId : a.charId);
+                                        return (
+                                            <div className="space-y-1.5">
+                                                <div className="text-[11px] font-bold text-slate-700">
+                                                    正面 {introCheat.heads}/{introCheat.coins} 枚——被 {npcName} 当场抓包！你要怎么办？
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <button onClick={() => submitCheatChoice('beg')}
+                                                        className="py-2 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98]">🥺 向他求情</button>
+                                                    <button onClick={() => submitCheatChoice('curse')}
+                                                        className="py-2 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">😡 辱骂对方</button>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <input value={cheatChoiceText} onChange={e => setCheatChoiceText(e.target.value)}
+                                                        placeholder="或者自己写一句回应 TA…"
+                                                        className="flex-1 min-w-0 px-2.5 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none" />
+                                                    <button onClick={() => submitCheatChoice('custom', cheatChoiceText)} disabled={!cheatChoiceText.trim()}
+                                                        className="shrink-0 px-3 rounded-lg bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-90 disabled:opacity-40">发送</button>
+                                                </div>
+                                                <p className="text-[9px] text-slate-400 leading-tight">你的选择会写进 TA 的记忆，并决定 TA 要不要继续这场对战。</p>
+                                            </div>
+                                        );
+                                    })()}
                                     {introCheat.phase === 'reacting' && (
                                         <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
                                             正面 {introCheat.heads}/{introCheat.coins} 枚——被抓住了！{charNameOf(a.charId === 'user' ? b.charId : a.charId)} 正在表态…
@@ -2247,10 +2303,10 @@ const PetPvpApp: React.FC = () => {
                                         addToast(`已把全部 8 个调用点统一为「${ps?.name || src}」`, 'success');
                                     }}
                                     className="w-full py-2.5 mb-1 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm outline-none">
-                                    <option value="">☑ 一键设为相同（点这里选一个预设，下面全部调用点统一成它）</option>
+                                    <option value="">一键设置为相同</option>
                                     {apiPresets.map(ps => <option key={ps.id} value={ps.id}>统一为：{ps.name}（{ps.config.model || '默认模型'}）</option>)}
                                 </select>
-                                <p className="text-[9px] text-slate-400 mt-1 mb-2 leading-tight">不想挨个设就点上面选一个：选完全部调用点立即统一；不设的调用点回落主聊天 API。</p>
+                                <p className="text-[9px] text-slate-400 mt-1 mb-2 leading-tight">选一个 = 下面全部调用点统一成它；不设的调用点回落主聊天 API。</p>
                                 {([
                                     ['apiPresetIdGacha', '抽卡评价'],
                                     ['apiPresetIdBattle', '战报播报（导演/轮调）'],
@@ -2340,7 +2396,7 @@ const PetPvpApp: React.FC = () => {
                                     )}
                                     {promptTab === 'cheat' && (
                                         <div className="space-y-1.5">
-                                            <p className="text-[9px] text-slate-400 leading-tight">出千失败被抓包后发给对手，让 TA 按人设表态并判断是否继续。占位符：{'{人设}{玩家}{金额}{我方宠物}'}</p>
+                                            <p className="text-[9px] text-slate-400 leading-tight">出千失败被抓包、你选完求情/辱骂/自定义回应后发给对手，让 TA 按人设表态并判断是否继续。占位符：{'{人设}{玩家}{金额}{我方宠物}{玩家回应}'}</p>
                                             <textarea value={meta.promptCheatReact || PROMPT_CHEAT_REACT_DEFAULT} onChange={async e => { const next = { ...meta, promptCheatReact: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={7}
                                                 className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
                                             <button onClick={async () => { const next = { ...meta, promptCheatReact: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认出千反应提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
