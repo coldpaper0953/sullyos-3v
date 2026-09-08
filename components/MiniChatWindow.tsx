@@ -14,8 +14,8 @@ const loadPos = (): { x: number; y: number } => {
             if (typeof p?.x === 'number' && typeof p?.y === 'number') return p;
         }
     } catch { /* ignore */ }
-    // 默认停在原来的位置（右下角，right-2 bottom-16）
-    return { x: Math.max(8, window.innerWidth - 328), y: Math.max(8, window.innerHeight - 480) };
+    // 默认停在原来的位置（右下角）；窗口宽 17.5rem，留 8px 边距
+    return { x: Math.max(8, window.innerWidth - 288), y: Math.max(8, window.innerHeight - 360) };
 };
 
 /**
@@ -163,26 +163,53 @@ const MiniChatWindow: React.FC = () => {
                 </div>
             )}
 
-            {/* 小聊天窗：功能与私聊一致，可回复；标题栏拖动（位置记忆）；关闭即已读不回 */}
+            {/* 小聊天窗：功能与私聊一致，可回复；标题栏拖动（位置记忆）；关闭即已读不回。
+                改小挡对话的问题：宽度 80→17.5rem（280px）、高度 26rem→20rem；内部 Chat 靠
+                .sully-mini-chat 作用域 CSS 整体紧凑化（头部/输入区/功能面板都缩小），
+                不影响主聊天界面。 */}
             {open && view === 'chat' && (
                 <div style={{ left: pos.x, top: pos.y, touchAction: 'none' }}
-                    className="fixed z-[96] w-80 h-[26rem] max-h-[70vh] rounded-2xl overflow-hidden shadow-2xl border border-[#AFA3A1]/50 bg-[#F9FBF5] flex flex-col animate-fade-in">
+                    className="fixed z-[96] w-[17.5rem] h-[20rem] max-h-[55vh] rounded-2xl overflow-hidden shadow-2xl border border-[#AFA3A1]/50 bg-[#F9FBF5] flex flex-col animate-fade-in">
+                    {/* 小窗模式下的紧凑化：Chat 组件（头部/输入区/面板）全套缩小一号 */}
+                    <style>{`
+                        .sully-mini-chat .sully-chat-header { min-height: 2.6rem !important; padding-top: 2px !important; padding-bottom: 2px !important; }
+                        .sully-mini-chat .sully-chat-header .sully-chat-avatar { width: 1.5rem !important; height: 1.5rem !important; }
+                        .sully-mini-chat .sully-chat-header .sully-chat-name { font-size: 11px !important; }
+                        .sully-mini-chat .sully-chat-header .sully-chat-status { display: none !important; }
+                        .sully-mini-chat .sully-chat-header .sully-chat-token { display: none !important; }
+                        .sully-mini-chat .sully-chat-header button svg { width: 0.9rem !important; height: 0.9rem !important; }
+                        .sully-mini-chat .sully-chat-header button { padding: 4px !important; }
+                        .sully-mini-chat .sully-chat-buffs { display: none !important; }
+                        .sully-mini-chat .sully-chat-inputbar { padding: 4px !important; gap: 6px !important; }
+                        .sully-mini-chat .sully-chat-inputbar > div { padding: 4px 6px !important; gap: 6px !important; }
+                        .sully-mini-chat .sully-chat-inputbar textarea { padding: 6px 8px !important; font-size: 13px !important; max-height: 2.6rem !important; }
+                        .sully-mini-chat .sully-chat-inputbar .sully-chat-panel { max-height: 9.5rem !important; }
+                        .sully-mini-chat .sully-chat-inputbar .sully-chat-panel button { display: none !important; }
+                        .sully-mini-chat .sully-chat-inputbar > div > button { width: 1.75rem !important; height: 1.75rem !important; min-width: 1.75rem !important; min-height: 1.75rem !important; }
+                        .sully-mini-chat .sully-chat-inputbar > div > button svg { width: 1.05rem !important; height: 1.05rem !important; }
+                    `}</style>
+                    <style>{`
+                        .sully-mini-chat .sully-chat-header .sully-chat-back,
+                        .sully-mini-chat .sully-chat-header .sully-chat-trigger { padding: 4px !important; }
+                        .sully-mini-chat .sully-chat-header .sully-chat-back svg,
+                        .sully-mini-chat .sully-chat-header .sully-chat-trigger svg { width: 0.85rem !important; height: 0.85rem !important; }
+                    `}</style>
                     <div
                         onPointerDown={e => { dragOffsetRef.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }; setDragging(true); }}
                         title="按住这里拖动窗口"
-                        className={`shrink-0 px-2.5 py-1 bg-[#F9FBF5] border-b border-[#AFA3A1]/30 flex items-center gap-2 touch-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                        className={`shrink-0 px-2 py-1 bg-[#F9FBF5] border-b border-[#AFA3A1]/30 flex items-center gap-2 touch-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
                     >
                         <button onClick={() => setView('contacts')} title="返回通讯录列表"
-                            className="w-5 h-5 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="w-2.5 h-2.5"><path d="M14.5 5.5L8 12l6.5 6.5" /></svg>
+                            className="w-4 h-4 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="w-2 h-2"><path d="M14.5 5.5L8 12l6.5 6.5" /></svg>
                         </button>
-                        <span className="text-[11px] font-bold text-[#3a3a36] flex-1 truncate">{charOf(targetChar)?.name || '私聊'}</span>
+                        <span className="text-[10px] font-bold text-[#3a3a36] flex-1 truncate">{charOf(targetChar)?.name || '私聊'}</span>
                         <button onClick={closeAndMarkRead} title="关闭并标记已读（已读不回）"
-                            className="w-5 h-5 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="w-3 h-3"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                            className="w-4 h-4 rounded-full bg-[#F9FBF5] border border-[#AFA3A1]/40 text-[#8a8474] flex items-center justify-center active:scale-90">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="w-2 h-2"><path d="M6 6l12 12M18 6L6 18" /></svg>
                         </button>
                     </div>
-                    <div className="flex-1 min-h-0 overflow-hidden">
+                    <div className="flex-1 min-h-0 overflow-hidden sully-mini-chat">
                         <Chat />
                     </div>
                 </div>
