@@ -4215,6 +4215,9 @@ export interface Pet {
     weight?: number;            // template 专属：池子权重（概率制，永不抽空）
     imageRef?: string;          // 用户上传图片（blobref/dataURL），优先于颜文字
     kaomoji?: string;           // 无图时的文字形象（颜文字/点阵图）
+    /** 状态差分：受击时的替换形象（图片 ref / 颜文字/点阵），空 = 无差分（一直用 imageRef/kaomoji） */
+    hurtImageRef?: string;
+    hurtKaomoji?: string;
     desc?: string;              // 脚本生成的形象描述
     evalText?: string;          // 角色对这次抽卡结果的口吻评价（角色抽卡时 AI 生成）
     source?: 'pool' | 'random'; // pet 专属：来自池子命中还是随机生成
@@ -4260,10 +4263,22 @@ export interface PetMeta {
     /** @deprecated 已由 apiPresetIdGacha / apiPresetIdBattle 取代（保留兼容旧存档，不再出 UI） */
     apiPresetIdGacha?: string;  // 抽卡评价专用 API 预设 id（不设 = 主聊天 API）
     apiPresetIdBattle?: string; // 战报播报专用 API 预设 id（不设 = 主聊天 API）
+    apiPresetIdPetPick?: string;   // NPC 选宠心声 API 预设 id
+    apiPresetIdCheatReact?: string; // 出千被抓包 NPC 情绪反应 API 预设 id
+    apiPresetIdCheatAbort?: string; // 出千中断解释 API 预设 id
+    apiPresetIdPunish?: string;    // 轮盘惩罚回应 API 预设 id
+    apiPresetIdPunishWinner?: string; // user 败胜者围观 API 预设 id
+    apiPresetIdRvr?: string;       // NPC 互打吐槽 API 预设 id
     battleReplyMode?: 'director' | 'roundRobin'; // 战后发言模式：导演=一次 API 整段（默认）/ roundRobin=败者胜者各调一次按序落库
     promptPunish?: string;      // 轮盘惩罚回应提示词模板（{人设}{惩罚}{赢家}）
-  promptPunishWinner?: string; // user 败时胜者围观提示词模板（{人设}{惩罚}{输家}）
+    promptPunishWinner?: string; // user 败时胜者围观提示词模板（{人设}{惩罚}{输家}）
     promptBetStake?: string;    // 赌钱模式压金提示词模板（{A主人}{B主人}{金额}）
+    promptPetPick?: string;     // NPC 选宠心声提示词模板（{人设}{对手}{对手宠物}{对手品级}{候选列表}）
+    promptCheatReact?: string;  // 出千被抓包 NPC 情绪反应提示词模板（{人设}{玩家}{金额}{我方宠物}）
+    promptCheatAbort?: string; // 出千被抓包 NPC 中断解释提示词模板（{人设}{玩家}）
+    promptRvrTalk?: string;     // NPC 互打吐槽提示词模板（{人设}{我方宠物}{对方主人}{对方宠物}{结果}）
+    /** 每个调用点独立选 API 预设；不设 = 主聊天 API。旧键（apiPresetIdGacha/Battle 等）逐个保留 */
+    apiPresetIdByPurpose?: Record<string, string>;
     gachaCharIds?: string[];    // 批量抽奖对象（多选；含 user）——「谁去抽奖」多选态
 }
 

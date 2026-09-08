@@ -73,6 +73,37 @@ const PROMPT_RVR_TALK_DEFAULT = `{人设}
 
 请用你自己的口吻发一条消息（一两句，40 字以内）：可以吐槽 {对方主人}、炫耀、或者帮用户带个话，直接输出消息本身，不要输出其他内容。`;
 
+// NPC 选宠心声：user 参战时 NPC 按人设从候选里挑宠物（调一次 API），产生 20 字左右心声。
+// 注意给 AI 的 user 宠物信息只有名字和品级（不透数值，NPC 「看不到」对手底细）。
+const PROMPT_PET_PICK_DEFAULT = `{人设}
+
+你即将和 {对手} 进行宠物对战，对方的出场宠物是「{对手宠物}」（{对手品级} 级）。
+
+你可以从自己的宠物里选一只出战，候选如下：
+{候选列表}
+
+请从候选里选出你的出战宠物。输出格式（两行，照抄这个格式，不要多输出任何字）：
+选：你选中的宠物名字（必须从候选里抄，原样）
+心声：你对这场对战的期待或盘算，20 个字左右`;
+// 出千被抓包：user 出千失败（正面<5）必被发现 → NPC 调一次 API 给情绪反应并判断是否继续
+const PROMPT_CHEAT_REACT_DEFAULT = `{人设}
+
+你刚刚发现 {玩家} 在宠物对战开始前给宠物做了手脚（他花了 {金额} 金币出千，结果被你当场抓包，出千已作废）。
+
+你自己的出战宠物是「{我方宠物}」。
+
+请从你的角度对被抓包这件事做出反应（揭发/无视/溺爱/无奈等情绪都可以，按你的人设来），并判断你要不要继续这场对战。
+输出格式（两行，照抄这个格式，不要多输出任何字）：
+心声：你的情绪反应，10 到 30 个字
+继续：是 或 否`;
+
+// 出千被抓包且 NPC 决定中断：再调一次 API 解释中断原因，发给 user 私聊 + 写记忆
+const PROMPT_CHEAT_ABORT_DEFAULT = `{人设}
+
+你刚刚因为 {玩家} 出千作弊，中断了和 TA 的宠物对战。
+
+请用你自己的口吻给 {玩家} 发一条私聊，解释你为什么中断这场对战（一两句话，40 字以内），直接输出消息本身，不要输出其他内容。`;
+
 // 赌钱模式压金提示词：开局注入给双方「谁押了谁多少金币」，让角色带着赌注意识打完这场
 const PROMPT_BET_STAKE_DEFAULT = `{A人设}
 
@@ -303,7 +334,22 @@ const PetPvpApp: React.FC = () => {
     const [battling, setBattling] = useState(false);
     // 出千 / 战后感言横幅 / 败者惩罚（转盘弹窗）
     // 出千改开场选择：battleIntro=点开战后「要不要出千」的弹窗数据；activeCheat=本场生效中的出千（关掉=null）
-    const [battleIntro, setBattleIntro] = useState<null | { a: PetCombatant; b: PetCombatant; userSide: 'a' | 'b' }>(null);
+    // npcPick=④ NPC 选宠 API 的结果（loading=调选中；line=20 字心声；petName=按人设选中的宠物名）
+    const [battleIntro, setBattleIntro] = useState<null | {
+        a: PetCombatant; b: PetCombatant; userSide: 'a' | 'b';
+        npcPick?: { loading?: boolean; petName?: string; line?: string };
+    }>(null);
+    // ③ 出千金币化的弹窗内状态机：flipping=掷硬币中 / reacting=NPC 情绪反应调用中 /
+    // caught=被抓包、NPC 决定继续（等 user 点「继续对战」）/ aborted=NPC 中断整场（收尾已完成）
+    const [introCheat, setIntroCheat] = useState<null | {
+        phase: 'flipping' | 'reacting' | 'caught' | 'aborted';
+        coins: number; heads: number; cost: number;
+        text?: string; reaction?: string; abortMsg?: string;
+    }>(null);
+    const [cheatCost, setCheatCost] = useState(100); // 出千投入的金币（10 的倍数；N 金币 = N/10 枚硬币）
+    // ⑨ 本局串联记忆：开战时清空，押注/选宠心声/出千反应逐条推进来——本场后续每次
+    // API 调用的提示词都会带上（【本场对战进程】块），NPC「记得」本局刚发生的事
+    const sessionRef = useRef<null | { lines: string[] }>(null);
     const [activeCheat, setActiveCheat] = useState<null | { buff: Parameters<typeof simulateContinue>[4]; text: string }>(null);
     const [narrating, setNarrating] = useState(false);
     const [wheelModal, setWheelModal] = useState<null | { loserCharId: string; winnerCharId: string }>(null);
@@ -311,10 +357,15 @@ const PetPvpApp: React.FC = () => {
     const [wheelSpun, setWheelSpun] = useState<null | { text: string; memSaved: boolean }>(null);
     const [tplModalOpen, setTplModalOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false); // 设置弹窗（顶栏齿轮）
-    const [promptTab, setPromptTab] = useState<'gacha' | 'battle' | 'punish' | 'bet'>('gacha'); // 设置弹窗里的提示词选项栏
+    const [promptTab, setPromptTab] = useState<'gacha' | 'battle' | 'punish' | 'bet' | 'petPick' | 'cheat' | 'rvr'>('gacha'); // 设置弹窗里的提示词选项栏
     const [punishResult, setPunishResult] = useState<null | { text: string; memSaved: boolean }>(null);
     // 自定义盲文多帧编辑：每帧一个框（本地编辑态，存库时按空行合并）
     const [frameBoxes, setFrameBoxes] = useState<string[] | null>(null);
+    // ⑦ 受击差分编辑（宠物列表里点「差分」）：当前编辑的宠物 + 两个草稿（颜文字 / 图片）
+    const [hurtEditPet, setHurtEditPet] = useState<null | Pet>(null);
+    const [hurtKaomojiDraft, setHurtKaomojiDraft] = useState('');
+    const [hurtImageDraft, setHurtImageDraft] = useState<string | undefined>();
+    const hurtFileRef = useRef<HTMLInputElement>(null);
 
     const charNameOf = (id: string) => id === 'user' ? (userProfile.name || '我') : (characters.find(c => c.id === id)?.name || '未知');
     const charAvatarOf = (id: string) => id === 'user' ? userProfile.avatar : characters.find(c => c.id === id)?.avatar;
@@ -420,10 +471,26 @@ const PetPvpApp: React.FC = () => {
     const templates = pets.filter(p => p.kind === 'template');
     const aliveByChar = (charId: string) => alivePets.filter(p => p.ownerId === charId);
 
-    // ─── AI 调用配置：战报/抽卡各自独立选一个 API 预设（不设 = 回落主聊天 API），与群聊/私聊互不影响 ───
+    // ─── AI 调用配置：每个调用点（抽卡/战报/选宠/出千反应/出千中断/惩罚/围观/rvr）各自
+    // 独立选一个 API 预设（不设 = 回落主聊天 API），与群聊/私聊互不影响；「一键设为相同」
+    // 在设置面板里由用户主动触发（把所有调用点统一成其中一个的配置）。
     // 旧存档的 modelMode='sub'（记忆宫殿副API）继续兼容：没选预设且旧值是 sub 时仍走 lightLLM。
-    const pickModel = (purpose: 'gacha' | 'battle') => {
-        const presetId = purpose === 'gacha' ? meta.apiPresetIdGacha : meta.apiPresetIdBattle;
+    type CallPurpose = 'gacha' | 'battle' | 'petPick' | 'cheatReact' | 'cheatAbort' | 'punish' | 'punishWinner' | 'rvr';
+    const PURPOSE_PRESET_KEY: Record<CallPurpose, string> = {
+        gacha: 'apiPresetIdGacha',
+        battle: 'apiPresetIdBattle',
+        petPick: 'apiPresetIdPetPick',
+        cheatReact: 'apiPresetIdCheatReact',
+        cheatAbort: 'apiPresetIdCheatAbort',
+        punish: 'apiPresetIdPunish',
+        punishWinner: 'apiPresetIdPunishWinner',
+        rvr: 'apiPresetIdRvr',
+    };
+    const pickModel = (purpose: 'gacha' | 'battle' | CallPurpose) => {
+        // 新版按调用点查顶层专用键（每调用点独立；抽卡/战报沿旧键兼容旧存档）；
+        // 「一键设为相同」= 把所有键统一填成同一个预设 id（设置面板里用户主动点）
+        const presetId = ((meta as any)[PURPOSE_PRESET_KEY[purpose as CallPurpose]] as string | undefined)
+            || meta.apiPresetIdByPurpose?.[purpose];
         const preset = presetId ? apiPresets.find(p => p.id === presetId) : undefined;
         if (preset?.config?.baseUrl) {
             const c = preset.config as { baseUrl: string; apiKey?: string; model?: string; temperature?: number };
@@ -436,8 +503,10 @@ const PetPvpApp: React.FC = () => {
     };
 
     // 角色提示词组装（和私聊一模一样的调用：ContextBuilder.buildCoreContext 完整输出
-    // ——世界书/世界观/印象/记忆库全在里面，零截断。近期消息只用于激活关键词条目）
-    const buildCharPrompt = async (charId: string) => {
+    // ——世界书/世界观/印象/记忆库全在里面，零截断。近期消息只用于激活关键词条目）。
+    // sessionLines=⑨ 本局串联记忆（押注/选宠心声/出千反应等）：本场后续每次调用都带上，
+    // 让 NPC「记得」本局内刚刚发生的事（区别于角色的长期记忆库）。
+    const buildCharPrompt = async (charId: string, sessionLines?: string[]) => {
         if (charId === 'user') return `【用户本人】${userProfile.name || '我'}（你就是用户本人，用户的口吻随意自然）`;
         const char = characters.find(c => c.id === charId);
         if (!char) return '';
@@ -448,7 +517,11 @@ const PetPvpApp: React.FC = () => {
         } catch { /* ignore */ }
         let palace = '';
         try { palace = String(await injectMemoryPalace(char, undefined, '宠物对战') || ''); } catch { /* ignore */ }
-        return palace ? `${core}\n${palace}` : core;
+        const base = palace ? `${core}\n${palace}` : core;
+        if (sessionLines && sessionLines.length) {
+            return `${base}\n\n【本场对战进程】（本场对战中已发生的事）\n${sessionLines.map(l => `- ${l}`).join('\n')}`;
+        }
+        return base;
     };
 
     // ─── 抽奖（脚本出结果；角色抽卡调一次 API 让角色评价；user 抽卡纯脚本）───
@@ -484,6 +557,9 @@ const PetPvpApp: React.FC = () => {
             poolTemplateId: hitTpl?.id,
             imageRef: hitTpl?.imageRef,
             kaomoji: hitTpl?.kaomoji,
+            // ⑦ 受击差分从模板继承；随机生成的宠物没配差分 → 战斗回放自动回落通用受伤颜
+            hurtImageRef: hitTpl?.hurtImageRef,
+            hurtKaomoji: hitTpl?.hurtKaomoji,
             createdAt: Date.now(),
         };
     };
@@ -645,17 +721,34 @@ const PetPvpApp: React.FC = () => {
         const g = order.find(gr => list.some(p => p.grade === gr));
         return g ? list.find(p => p.grade === g) || null : null;
     };
-    const gradePickPet = (charId: string): Pet | null => {
+    const gradePickPet = (charId: string, capGrade?: PetGrade): Pet | null => {
+        // ⑤ NPC 互打新规：双方各自脚本抽一个等级出战——等级上限以两仓中较低档兼容
+        // （一方仓里最高只有 C，双方都不出 B/A）；抽到的档没有宠物时从相邻档等概率补
         const list = aliveByChar(charId).slice().sort((a, b) => a.createdAt - b.createdAt);
         if (!list.length) return null;
-        const best = GRADE_ORDER.find(g => list.some(p => p.grade === g)) || 'E';
-        return list.find(p => p.grade === best) || list[0];
+        // 上限 = 两仓较低档（capGrade 由调用方算好传入）；没传时 = 自己仓里最高档
+        const ownBest = GRADE_ORDER.find(g => list.some(p => p.grade === g)) || 'E';
+        const cap = capGrade && GRADE_ORDER.indexOf(capGrade) > GRADE_ORDER.indexOf(ownBest) ? ownBest : (capGrade || ownBest);
+        const capIdx = GRADE_ORDER.indexOf(cap);
+        const pool = list.filter(p => GRADE_ORDER.indexOf(p.grade) >= capIdx);
+        if (!pool.length) return list[0];
+        // 抽等级：本仓各档等概率（存在该档才有票）
+        const grades = [...new Set(pool.map(p => p.grade))];
+        const g = grades[Math.floor(Math.random() * grades.length)];
+        const gList = pool.filter(p => p.grade === g);
+        return gList[Math.floor(Math.random() * gList.length)] || gList[0];
     };
-    // 对战出阵总入口：user 参战 → 以 user 出战宠的品级为基准，NPC 就近匹配同档；
-    // NPC 互打 → 各出最高档。UI 预览与实战共用这里，保证「所见即所打」。
-    const battlePetOf = (charId: string, userInBattle: boolean, userGrade?: PetGrade): Pet | null => {
+    // 对战出阵总入口：user 参战 → 以 user 出战宠的品级为基准，NPC 就近匹配同档
+    // （④ NPC 也可由 AI 按人设选——见 startBattle 的 npcPickPetByAI，脚本值只做兜底）；
+    // NPC 互打 → ⑤ 各自脚本抽等级，档位上限以两仓较低档兼容。
+    // UI 预览与实战共用这里，保证「所见即所打」。
+    const battlePetOf = (charId: string, userInBattle: boolean, userGrade?: PetGrade, npcPickName?: string): Pet | null => {
         if (userInBattle) {
             if (charId === 'user') return userPickPet();
+            if (npcPickName) {
+                const hit = aliveByChar(charId).find(p => p.name === npcPickName);
+                if (hit) return hit;
+            }
             return matchGradePet(charId, userGrade || (userPickPet()?.grade as PetGrade) || 'E');
         }
         return gradePickPet(charId);
@@ -683,7 +776,7 @@ const PetPvpApp: React.FC = () => {
             if (mode === 'avs' && !bId) bId = pickRandomCharWithPet(aId);
         }
         if (aId === bId) { addToast('两边不能是同一个角色', 'error'); return null; }
-        // user 是否参战（决定品级基准：user 在 → NPC 按 user 宠物档就近匹配；不在 → NPC 各出最高档）
+        // user 是否参战（决定品级基准：user 在 → NPC 按 user 宠物档就近匹配；不在 → ⑤ NPC 互打新规）
         const userIn = aId === 'user' || bId === 'user';
         const userPet = userIn ? userPickPet() : null;
         const userGrade = (userPet?.grade as PetGrade) || 'E';
@@ -701,6 +794,32 @@ const PetPvpApp: React.FC = () => {
         const a = combatantOf(aId, userIn, userGrade);
         const b = combatantOf(bId, userIn, userGrade);
         if (!a || !b) return null;
+        // ⑤ NPC 互打：等级上限 = 两仓最高档的较低档（就低兼容）；
+        // A 方先脚本抽档，B 方就近匹配 A 的档（同档优先，没有则相邻档等概率）
+        if (!userIn) {
+            const capOf = (id: string) => GRADE_ORDER.find(g => aliveByChar(id).some(p => p.grade === g)) || 'E';
+            const cap = GRADE_ORDER.indexOf(capOf(aId)) >= GRADE_ORDER.indexOf(capOf(bId)) ? capOf(aId) : capOf(bId);
+            const pa = gradePickPet(aId, cap);
+            const nearestGradeOf = (id: string, target: PetGrade): PetGrade | null => {
+                const grades = [...new Set(aliveByChar(id).map(p => p.grade))];
+                if (grades.includes(target)) return target;
+                const idx = GRADE_ORDER.indexOf(target);
+                for (let d = 1; d < GRADE_ORDER.length; d++) {
+                    const opts = [idx - d, idx + d].filter(i => i >= 0 && i < GRADE_ORDER.length && grades.includes(GRADE_ORDER[i]));
+                    if (opts.length) return GRADE_ORDER[opts[Math.floor(Math.random() * opts.length)]];
+                }
+                return null;
+            };
+            let pb: Pet | null = null;
+            if (pa) {
+                const gb = nearestGradeOf(bId, pa.grade);
+                if (gb) pb = aliveByChar(bId).filter(p => p.grade === gb).sort((x, y) => x.createdAt - y.createdAt)[0] || null;
+            }
+            if (!pb) pb = gradePickPet(bId, cap);
+            const na = pa ? buildCombatant(pa, aId, charNameOf(aId), meta.totalStatPoints) : a;
+            const nb = pb ? buildCombatant(pb, bId, charNameOf(bId), meta.totalStatPoints) : b;
+            return [na, nb];
+        }
         return [a, b];
     };
 
@@ -734,13 +853,101 @@ const PetPvpApp: React.FC = () => {
         }
     };
 
+    // ─── ④ NPC 选宠（user 参战时）：把候选列表交给 NPC 按人设挑一只（调一次 API）───
+    // 返回 { petName, line }：petName 没匹配到候选时调用方回落脚本就近匹配；line 是 20 字心声。
+    // 给 AI 的 user 宠物信息只有名字和品级——NPC「看不到」对手宠物的数值底细。
+    const npcPickPetByAI = async (npcCharId: string, userPet: Pet, candidates: Pet[]): Promise<{ petName: string; line: string }> => {
+        const persona = await buildCharPrompt(npcCharId, sessionRef.current?.lines);
+        const listTxt = candidates.map(p => `- ${p.name}（${p.grade} 级 · 攻 ${p.atk}）`).join('\n');
+        const prompt = (meta.promptPetPick || PROMPT_PET_PICK_DEFAULT)
+            .split('{人设}').join(persona)
+            .split('{对手}').join(userProfile.name || 'User')
+            .split('{对手宠物}').join(userPet.name)
+            .split('{对手品级}').join(userPet.grade)
+            .split('{候选列表}').join(listTxt);
+        const cfg = pickModel('petPick');
+        const data = await safeFetchJson(
+            `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                body: JSON.stringify({
+                    model: cfg.model,
+                    messages: [
+                        { role: 'system', content: prompt },
+                        { role: 'user', content: '选你的出战宠物。' },
+                    ],
+                    temperature: 0.9, max_tokens: 512, stream: false,
+                }),
+            },
+            1, 90_000, { appName: '宠物对战', purpose: 'NPC选宠' },
+        );
+        const d2 = await data;
+        const raw = extractContent(d2);
+        const pickMatch = raw.match(/选[：:]\s*(.+)/);
+        const lineMatch = raw.match(/心声[：:]\s*(.+)/);
+        const petName = (pickMatch?.[1] || '').trim().replace(/[「」『』"']/g, '');
+        const line = (lineMatch?.[1] || '').trim().slice(0, 60);
+        return { petName: candidates.some(p => p.name === petName) ? petName : '', line };
+    };
+
     const startBattle = async () => {
+        // ② user 参战 + 赌钱模式 → 押注是必选的（没选边先弹提示拦下）；NPC 互打可押可不押
+        const betActive = (meta.punishMode || 'wheel') === 'bet';
+        const userWillJoin = mode !== 'rvr' && (sideAChar === '' || sideAChar === 'user' || sideBChar === 'user');
+        if (betActive && userWillJoin) {
+            if (!betSide) { addToast('你参战的场次必须押注：押 A 或押 B（押对手赢也行）', 'error'); return; }
+            if (betAmount < 100) { addToast('押注金额 100 金币起步', 'error'); return; }
+            const userGold = goldOf('user');
+            if (userGold < betAmount) { addToast('你的金币不够押注', 'error'); return; }
+        }
         const sides = resolveSides();
         if (!sides) return;
         const [a, b] = sides;
         // user 参战 → 先弹「本场要不要出千」的选择；NPC 对战（rvr 等）直接开打
         const userSide = a.charId === 'user' ? 'a' : b.charId === 'user' ? 'b' : null;
-        if (userSide) { setBattleIntro({ a, b, userSide }); return; }
+        if (userSide) {
+            // ⑨ 新一局：本局串联记忆清零
+            sessionRef.current = { lines: [] };
+            setIntroCheat(null);
+            // ② user 押注写进本局串联记忆 + NPC 角色记忆（NPC 后续调 API 都知道你押了谁多少）
+            if (betActive && betSide && betAmount > 0) {
+                const stakeName = betSide === 'a' ? a.charName : b.charName;
+                const stakeLine = `${userProfile.name || 'User'} 押了 ${stakeName} ${betAmount} 金币赢这场对战。`;
+                sessionRef.current.lines.push(stakeLine);
+                const npcId = a.charId === 'user' ? b.charId : a.charId;
+                if (npcId !== 'user') appendCharMemory(npcId, `${new Date().toLocaleDateString('zh-CN')}，${userProfile.name || 'User'} 押了 ${stakeName} ${betAmount} 金币赢这场宠物对战。`);
+            }
+            // ④ NPC 选宠心声：先弹窗（npcPick.loading），选宠调 API 的结果回填到弹窗内展示
+            setBattleIntro({ a, b, userSide, npcPick: { loading: true } });
+            (async () => {
+                const npcId = a.charId === 'user' ? b.charId : a.charId;
+                const npcCombatant = a.charId === 'user' ? b : a;
+                const userPet = a.charId === 'user' ? pets.find(p => p.id === a.petId) : pets.find(p => p.id === b.petId);
+                const npcPets = npcId !== 'user' ? aliveByChar(npcId) : [];
+                const userGrade = (npcCombatant.grade as PetGrade) || 'E'; // 对手与 user 同档（就近匹配的基准档）
+                if (!userPet || !npcPets.length) { setBattleIntro(cur => cur ? { ...cur, npcPick: {} } : cur); return; }
+                // 候选 = 就近匹配档的全部宠物（matchGradePet 同款档位判定），AI 只在这个池子里按人设选
+                const gIdx = GRADE_ORDER.indexOf(userGrade);
+                const order = [...GRADE_ORDER.slice(gIdx), ...GRADE_ORDER.slice(0, gIdx).reverse()];
+                const matched = order.find(g => npcPets.some(p => p.grade === g));
+                const candidates = matched ? npcPets.filter(p => p.grade === matched).sort((x, y) => x.createdAt - y.createdAt) : [];
+                if (!candidates.length) { setBattleIntro(cur => cur ? { ...cur, npcPick: {} } : cur); return; }
+                try {
+                    const { petName, line } = await npcPickPetByAI(npcId, userPet, candidates);
+                    const pickedName = petName || candidates[0].name;
+                    if (line) {
+                        sessionRef.current?.lines.push(`${charNameOf(npcId)} 选择了「${pickedName}」出战（心声：${line}）`);
+                        appendCharMemory(npcId, `${new Date().toLocaleDateString('zh-CN')}，${charNameOf(npcId)} 在宠物对战选宠时选了「${pickedName}」：${line}`);
+                    }
+                    setBattleIntro(cur => cur ? { ...cur, npcPick: { petName: pickedName, line } } : cur);
+                } catch {
+                    setBattleIntro(cur => cur ? { ...cur, npcPick: {} } : cur);
+                }
+            })();
+            return;
+        }
+        sessionRef.current = { lines: [] }; // NPC 对战也开新局（rvr 感言可引用本局串联记忆）
         await beginBattle(a, b, null);
     };
 
@@ -824,7 +1031,9 @@ const PetPvpApp: React.FC = () => {
                 }
                 const record: PetBattleRecord = { ...arena.record, winnerCharId: winSide === 'a' ? arena.a.charId : arena.b.charId, committed: true };
                 if (record.bet && !record.bet.settled && (meta.punishMode || 'wheel') === 'bet') {
-                    const won = record.bet.side === record.winnerCharId;
+                    // bet.side 是 'a'/'b'（阵容位），winnerCharId 是角色 id——先换算再比对
+                    const winnerSide: 'a' | 'b' = record.winnerCharId === record.aCharId ? 'a' : 'b';
+                    const won = record.bet.side === winnerSide;
                     const payout = won ? Math.round(record.bet.amount * record.bet.odds) : 0;
                     if (payout > 0) await setGoldOf('user', goldOf('user') + payout);
                     record.bet = { ...record.bet, won, settled: true };
@@ -873,14 +1082,14 @@ const PetPvpApp: React.FC = () => {
                         (async (sideArg, foeArg, sideWon) => {
                             let text = '';
                             try {
-                                const persona = await buildCharPrompt(sideArg.charId);
-                                const prompt = PROMPT_RVR_TALK_DEFAULT
+                                const persona = await buildCharPrompt(sideArg.charId, sessionRef.current?.lines);
+                                const prompt = (meta.promptRvrTalk || PROMPT_RVR_TALK_DEFAULT)
                                     .split('{人设}').join(persona)
                                     .split('{我方宠物}').join(sideArg.name)
                                     .split('{对方主人}').join(foeArg.charName)
                                     .split('{对方宠物}').join(foeArg.name)
                                     .split('{结果}').join(sideWon ? `你的「${sideArg.name}」赢了` : `你的「${sideArg.name}」输给了对方的「${foeArg.name}」`);
-                                const cfg = pickModel('battle');
+                                const cfg = pickModel('rvr');
                                 const data = await safeFetchJson(
                                     `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
                                     {
@@ -932,11 +1141,11 @@ const PetPvpApp: React.FC = () => {
                 const lines: string[] = [];
                 try {
                     for (const speaker of [loser, winner]) {
-                        const persona = await buildCharPrompt(speaker.charId);
+                        const persona = await buildCharPrompt(speaker.charId, sessionRef.current?.lines);
                         const isLoser = speaker === loser;
                         const prompt = (meta.promptBattle || PROMPT_BATTLE_DEFAULT)
-                            .split('{A人设}').join(await buildCharPrompt(a.charId))
-                            .split('{B人设}').join(await buildCharPrompt(b.charId))
+                            .split('{A人设}').join(await buildCharPrompt(a.charId, sessionRef.current?.lines))
+                            .split('{B人设}').join(await buildCharPrompt(b.charId, sessionRef.current?.lines))
                             .split('{A主人}').join(a.charId === 'user' ? (userProfile.name || '我') : a.charName)
                             .split('{B主人}').join(b.charId === 'user' ? (userProfile.name || '我') : b.charName)
                             .split('{A名}').join(a.name)
@@ -989,8 +1198,8 @@ const PetPvpApp: React.FC = () => {
             const cfg = pickModel('battle');
             setNarrating(true);
             try {
-                const personaA = await buildCharPrompt(a.charId);
-                const personaB = await buildCharPrompt(b.charId);
+                const personaA = await buildCharPrompt(a.charId, sessionRef.current?.lines);
+                const personaB = await buildCharPrompt(b.charId, sessionRef.current?.lines);
                 const loser = record.winnerCharId === a.charId ? b : a;
                 const winner = record.winnerCharId === a.charId ? a : b;
                 const petSheet = (c: PetCombatant) => `宠物「${c.name}」（${c.grade}级 · 攻击 ${c.atk} · 敏捷 ${c.spd}/闪避 ${c.dodge}/暴击 ${c.crit} · HP ${c.maxHp}）`;
@@ -1047,34 +1256,143 @@ const PetPvpApp: React.FC = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [arena, arenaPhase, eventIdx]);
 
-    // ─── 出千（开场选择制）：开战弹窗里 user 决定本场要不要出千。成功 = 随机属性全场
-    // 翻倍，直到 user 手动「关闭出千」或战斗结束；被抓 = 当场取消（无翻倍）；搞砸 =
-    // 什么都没发生。三种结果都写进战况。概率沿用设置里的 cheatSuccessRate/cheatCaughtRate ───
-    // 掷开场出千：untilRound>0 = 真生效（全场）；被抓/搞砸 = untilRound 0（永不生效，
-    // 但引擎照播 cheat 战况事件，三种结果都会出现在战斗日志里）
-    const rollOpeningCheat = (userSide: 'a' | 'b', me: PetCombatant, foe: PetCombatant): { buff: NonNullable<Parameters<typeof simulateContinue>[4]>; text: string } => {
-        const success = Math.random() * 100 < (meta.cheatSuccessRate ?? 65);
-        const caught = success && Math.random() * 100 < (meta.cheatCaughtRate ?? 35);
-        const stat = (['crit', 'spd', 'dodge'] as const)[Math.floor(Math.random() * 3)];
-        const statName = stat === 'crit' ? '暴击' : stat === 'spd' ? '敏捷' : '闪避';
-        const effective = success && !caught;
-        const text = effective
-            ? `【出千】${charNameOf('user')} 赛前偷偷给 ${me.name} 做了手脚——${statName} 全场翻倍（手动关闭或战斗结束前一直生效），没有被察觉…`
-            : success
-                ? `【出千】${me.name} 的 ${statName} 刚要翻倍，就被 ${foe.name} 当场抓包——手脚被拍掉，无效！`
-                : `【出千】${charNameOf('user')} 想给 ${me.name} 做手脚，结果手一抖搞砸了，什么都没发生。`;
-        return { buff: { side: userSide, stat, untilRound: effective ? BATTLE_MAX_ROUNDS + 1 : 0 }, text };
+    // ─── ③ 出千（金币化）：N 金币（10 的倍数）= N/10 枚硬币各掷正反面，正面 ≥5 枚
+    // 成功（对手不知情，我方宠物一项属性 ×1.5 全场）；正面 <5 枚失败且必被发现——
+    // NPC 调一次 API 给情绪反应（揭发/无视/溺爱/无奈）并判断继续与否：
+    // · 继续游戏 → 写进本局串联记忆，战况播一条「手脚被拍掉」照常开打（无 buff）
+    // · 中断游戏 → 再调一次 API 解释原因 → 发私聊 user + 双方写记忆，本场作废
+    // 掷硬币：硬币数 = 金币/10（100 金币 = 10 枚），正反面概率一致
+    const rollCheatCoins = (coins: number) => {
+        let heads = 0;
+        for (let i = 0; i < coins; i++) if (Math.random() < 0.5) heads++;
+        return heads;
     };
-
-    // 出千选择弹窗的按钮：正常打 → 直接开战；出千 → 掷完再开战
-    const startWithCheat = async (wantCheat: boolean) => {
+    // 出千按钮：扣金币 → 掷硬币 → 成功直接带着 buff 开战 / 失败走 NPC 反应流程
+    const doCheat = async () => {
         if (!battleIntro) return;
         const { a, b, userSide } = battleIntro;
         const me = userSide === 'a' ? a : b;
         const foe = userSide === 'a' ? b : a;
-        const openingCheat = wantCheat ? rollOpeningCheat(userSide, me, foe) : null;
+        const cost = Math.max(10, Math.round(cheatCost / 10) * 10); // 归到 10 的倍数
+        const userGold = goldOf('user');
+        if (userGold < cost) { addToast(`出千要 ${cost} 金币，你的金币不够`, 'error'); return; }
+        await setGoldOf('user', userGold - cost);
+        const coins = cost / 10;
+        const heads = rollCheatCoins(coins);
+        setIntroCheat({ phase: 'flipping', coins, heads, cost });
+        await new Promise(rs => setTimeout(rs, 1200)); // 掷硬币演出
+        if (heads >= 5) {
+            // 成功：正面 ≥5，对手无法得知——一项属性 ×1.5 全场（引擎 buff 同口径）
+            const stat = (['crit', 'spd', 'dodge'] as const)[Math.floor(Math.random() * 3)];
+            const statName = stat === 'crit' ? '暴击' : stat === 'spd' ? '敏捷' : '闪避';
+            const text = `【出千】${userProfile.name || '你'} 花 ${cost} 金币掷出 ${coins} 枚硬币（正面 ${heads} 枚）——出千成功，${me.name} 的 ${statName} 提升 50%（本场持续），没有被察觉…`;
+            setIntroCheat(null);
+            setBattleIntro(null);
+            sessionRef.current?.lines.push(`${userProfile.name || 'User'} 出千成功（对手未察觉）。`);
+            await beginBattle(a, b, { buff: { side: userSide, stat, untilRound: BATTLE_MAX_ROUNDS + 1 }, text });
+            return;
+        }
+        // 失败（正面 <5）且必被发现 → NPC 调 API 情绪反应 + 判断是否继续
+        setIntroCheat({ phase: 'reacting', coins, heads, cost });
+        const npcId = me.charId === 'user' ? foe.charId : me.charId;
+        let reaction = '';
+        let keepGoing = true;
+        try {
+            const persona = await buildCharPrompt(npcId, sessionRef.current?.lines);
+            const prompt = (meta.promptCheatReact || PROMPT_CHEAT_REACT_DEFAULT)
+                .split('{人设}').join(persona)
+                .split('{玩家}').join(userProfile.name || 'User')
+                .split('{金额}').join(String(cost))
+                .split('{我方宠物}').join(foe.name);
+            const cfg = pickModel('cheatReact');
+            const data = await safeFetchJson(
+                `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                    body: JSON.stringify({
+                        model: cfg.model,
+                        messages: [
+                            { role: 'system', content: prompt },
+                            { role: 'user', content: '说说你的看法。' },
+                        ],
+                        temperature: 0.9, max_tokens: 512, stream: false,
+                    }),
+                },
+                1, 90_000, { appName: '宠物对战', purpose: '出千被抓反应' },
+            );
+            const d2 = await data;
+            const raw = extractContent(d2);
+            const m1 = raw.match(/心声[：:]\s*(.+)/);
+            const m2 = raw.match(/继续[：:]\s*(是|否)/);
+            // 占位说明被 AI 原样抄回时不显示（显示一句兜底）；其余取正文
+            const cleaned = (t: string) => /<|>|^\s*$/.test(t) ? '' : t;
+            reaction = cleaned((m1?.[1] || '').trim().slice(0, 60)) || cleaned(raw.trim().split('\n').filter((l: string) => !l.includes('继续') && !l.includes('选：')).join(' ').slice(0, 60)) || '';
+            keepGoing = !m2 || m2[1] !== '否';
+        } catch { /* 反应调用失败 → 默认继续打（不中断不惩罚） */ }
+        const caughtLine = `${userProfile.name || 'User'} 出千失败（正面 ${heads}/${coins} 枚）被抓包，${charNameOf(npcId)} 表示${reaction || '很无语'}${keepGoing ? '，对战继续' : '，中断了这场对战'}。`;
+        sessionRef.current?.lines.push(caughtLine);
+        appendCharMemory(npcId, `${new Date().toLocaleDateString('zh-CN')}，${userProfile.name || 'User'} 出千作弊失败被我抓包：${reaction || '被我发现了'}。${keepGoing ? '对战继续。' : '我中断了这场对战。'}`);
+        if (keepGoing) {
+            setIntroCheat({ phase: 'caught', coins, heads, cost, reaction });
+            return; // 等 user 点「继续对战」（战况会播抓包文案，无 buff 正常打）
+        }
+        // NPC 决定中断：调一次 API 解释原因 → 私聊 user + 双方记忆（本场作废不结算）
+        let abortMsg = '';
+        try {
+            const persona = await buildCharPrompt(npcId, sessionRef.current?.lines);
+            const prompt = (meta.promptCheatAbort || PROMPT_CHEAT_ABORT_DEFAULT)
+                .split('{人设}').join(persona)
+                .split('{玩家}').join(userProfile.name || 'User');
+            const cfg = pickModel('cheatAbort');
+            const data = await safeFetchJson(
+                `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                    body: JSON.stringify({
+                        model: cfg.model,
+                        messages: [
+                            { role: 'system', content: prompt },
+                            { role: 'user', content: '说说吧。' },
+                        ],
+                        temperature: 0.9, max_tokens: 512, stream: false,
+                    }),
+                },
+                1, 90_000, { appName: '宠物对战', purpose: '出千中断解释' },
+            );
+            const d2 = await data;
+            abortMsg = extractContent(d2).slice(0, 200);
+        } catch { /* 解释失败用兜底句 */ }
+        if (!abortMsg) abortMsg = `${reaction || '出千被发现就别打了。'}这次对战到此为止。`;
+        try {
+            await DB.saveMessage({ charId: npcId, role: 'assistant', type: 'text', content: abortMsg });
+            announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: npcId, charName: charNameOf(npcId) });
+            window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: npcId } }));
+        } catch { /* 私聊落库失败不影响收尾 */ }
+        setIntroCheat({ phase: 'aborted', coins, heads, cost, reaction, abortMsg });
+    };
+    // 抓包后「继续对战」：战况播抓包文案（无 buff），正常开打
+    const continueAfterCaught = async () => {
+        if (!battleIntro) return;
+        const { a, b, userSide } = battleIntro;
+        const me = userSide === 'a' ? a : b;
+        const foe = userSide === 'a' ? b : a;
+        const c = introCheat;
+        const text = `【出千】${userProfile.name || '你'} 花 ${c?.cost ?? 0} 金币掷出 ${c?.coins ?? 0} 枚硬币（正面 ${c?.heads ?? 0} 枚）——出千失败被当场抓包（${c?.reaction || '对方很生气'}），手脚被拍掉，无效！`;
+        setIntroCheat(null);
         setBattleIntro(null);
-        await beginBattle(a, b, openingCheat);
+        await beginBattle(a, b, { buff: { side: userSide, stat: 'crit', untilRound: 0 }, text: `${text}对战继续。` });
+    };
+
+    // 出千选择弹窗的按钮：正常打 → 直接开战；出千 → 掷硬币流程（见 doCheat）
+    const startWithCheat = async (wantCheat: boolean) => {
+        if (!battleIntro) return;
+        const { a, b } = battleIntro;
+        if (wantCheat) { await doCheat(); return; }
+        setIntroCheat(null);
+        setBattleIntro(null);
+        await beginBattle(a, b, null);
     };
 
     // 「关闭出千」：从当前回放位置无 buff 续打（属性翻倍即刻停止），事件/战报改写沿用旧机制
@@ -1149,7 +1467,7 @@ const PetPvpApp: React.FC = () => {
         (async () => {
             let reaction = '';
             try {
-                const persona = await buildCharPrompt(speakerCharId);
+                const persona = await buildCharPrompt(speakerCharId, sessionRef.current?.lines);
                 const prompt = loserCharId !== 'user'
                     ? (meta.promptPunish || PROMPT_PUNISH_DEFAULT)
                         .split('{人设}').join(persona)
@@ -1159,7 +1477,7 @@ const PetPvpApp: React.FC = () => {
                         .split('{人设}').join(persona)
                         .split('{惩罚}').join(picked.text)
                         .split('{输家}').join(userProfile.name || 'User');
-                const cfg = pickModel('battle');
+                const cfg = pickModel(loserCharId !== 'user' ? 'punish' : 'punishWinner');
                 const data = await safeFetchJson(
                     `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
                     {
@@ -1244,11 +1562,16 @@ const PetPvpApp: React.FC = () => {
                             <div className="text-[11px] font-bold text-slate-600 truncate">{c.charName}</div>
                         </div>
                     <div className="flex items-center justify-center py-1 px-2 min-h-[110px]">
-                        {c.imageRef
-                            ? <TokenImg value={c.imageRef} className="w-full h-32 object-cover rounded-lg" />
-                            : (c.kaomoji || '').includes('\n')
-                                ? (() => { const m = dotMeasure(c.kaomoji!); return <pre className="font-mono whitespace-pre text-center text-slate-600" style={{ fontSize: dotFontPx(m.lines, m.cols, 150, 110), lineHeight: 1.15 }}>{c.kaomoji}</pre>; })()
-                                : <span className="text-[10px] font-mono whitespace-pre text-center leading-tight text-slate-600 break-all">{c.kaomoji || '(=ↀωↀ=)'}</span>}
+                        {/* ⑦ 受击差分：被命中的那一拍切换 hurt 差分图/颜文字；没配差分时回落常规形象
+                            （无任何形象的宠物给一个通用「受伤颜」——预设宠物天然有差分） */}
+                        {(() => {
+                            const img = isHurt ? (c.hurtImageRef || c.imageRef) : c.imageRef;
+                            const rawFace = isHurt ? (c.hurtKaomoji || c.kaomoji) : c.kaomoji;
+                            const dot = isHurt ? (c.hurtKaomoji || (c.kaomoji || '').includes('\n') ? rawFace : (rawFace || '(=×ω×=)')) : c.kaomoji;
+                            if (img) return <TokenImg value={img} className="w-full h-32 object-cover rounded-lg" />;
+                            if ((dot || '').includes('\n')) { const m = dotMeasure(dot!); return <pre className="font-mono whitespace-pre text-center text-slate-600" style={{ fontSize: dotFontPx(m.lines, m.cols, 150, 110), lineHeight: 1.15 }}>{dot}</pre>; }
+                            return <span className="text-[10px] font-mono whitespace-pre text-center leading-tight text-slate-600 break-all">{dot || (isHurt ? '(=×ω×=)' : '(=ↀωↀ=)')}</span>;
+                        })()}
                     </div>
                         <div className="px-2 pb-2 text-center">
                             <div className="text-xs font-bold text-slate-700 truncate">{c.name}</div>
@@ -1487,24 +1810,124 @@ const PetPvpApp: React.FC = () => {
                 const me = userSide === 'a' ? a : b;
                 const foe = userSide === 'a' ? b : a;
                 return (
-                    <div className="fixed inset-0 z-[225] bg-black/50 flex items-center justify-center p-6" onClick={() => setBattleIntro(null)}>
+                    <div className="fixed inset-0 z-[225] bg-black/50 flex items-center justify-center p-6" onClick={() => { if (!introCheat) setBattleIntro(null); }}>
                         <div className="w-full max-w-xs rounded-2xl bg-white p-4 space-y-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+                            {/* ④ NPC 选宠心声：AI 按人设选完宠物（或选宠中）显示在这里 */}
+                            {battleIntro.npcPick && (
+                                <div className="rounded-xl bg-[#F9FBF5] border border-[#AFA3A1]/40 px-3 py-2">
+                                    <div className="text-[10px] font-bold text-slate-600">
+                                        {battleIntro.npcPick.loading
+                                            ? <span className="flex items-center gap-1.5"><IcoDice className="w-3.5 h-3.5 animate-spin" /> {charNameOf(a.charId === 'user' ? b.charId : a.charId)} 正在选宠物…</span>
+                                            : `${charNameOf(a.charId === 'user' ? b.charId : a.charId)} 选择了「${battleIntro.npcPick.petName || (foe.name)}」出战`}
+                                    </div>
+                                    {!battleIntro.npcPick.loading && battleIntro.npcPick.line && (
+                                        <div className="text-[9px] text-slate-500 mt-1">心声：{battleIntro.npcPick.line}</div>
+                                    )}
+                                </div>
+                            )}
                             <div className="text-center space-y-1">
                                 <div className="flex items-center justify-center gap-1.5 text-sm font-black text-slate-800"><IcoDice className="w-4 h-4" /> 本场要不要出千？</div>
                                 <div className="text-[10px] leading-relaxed text-slate-500">
-                                    {me.name} vs {foe.name}。出千成功 = 随机一项属性（暴击/敏捷/闪避）<b>全场翻倍</b>，
-                                    不主动关就持续到战斗结束；可能失败或被对方抓包（概率在设置里调）。选中后对战中还能「关闭出千」。
+                                    {me.name} vs {foe.name}。出千要花金币：投入 N 金币（10 的倍数）= N/10 枚硬币，
+                                    正面 ≥5 枚成功——{me.name} 一项属性<b>提升 50%</b>（全场）且对手不知情；
+                                    正面 &lt;5 枚<b>失败且必被发现</b>，对手会当场表态，还可能直接中断这场对战。
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => startWithCheat(true)} className="py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm">
-                                    出千
-                                </button>
-                                <button onClick={() => startWithCheat(false)} className="py-2.5 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">
-                                    正常打
-                                </button>
+                            {/* ③ 出千投入金额（10 的倍数，向上取整） */}
+                            <div className="flex items-center gap-2 px-1">
+                                <span className="text-[10px] text-slate-500 shrink-0">投入金币</span>
+                                <input type="number" min={10} step={10} value={cheatCost}
+                                    onChange={e => setCheatCost(Math.max(10, parseInt(e.target.value) || 10))}
+                                    className="flex-1 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none tabular-nums" />
+                                <span className="text-[9px] text-slate-400 shrink-0">{Math.max(1, Math.round(Math.max(10, cheatCost) / 10))} 枚硬币</span>
                             </div>
-                            <div className="text-center text-[10px] text-slate-400">点弹窗外的空白处 = 放弃本场对战</div>
+                            {/* 出千流程态：掷硬币 → NPC 反应 → 抓包继续/中断 */}
+                            {introCheat && (
+                                <div className="rounded-xl bg-[#E9E8DB] border border-[#AFA3A1]/70 px-3 py-2.5 space-y-1.5">
+                                    {introCheat.phase === 'flipping' && (
+                                        <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5"><IcoCoin className="w-3.5 h-3.5 animate-spin" /> 掷 {introCheat.coins} 枚硬币中…</div>
+                                    )}
+                                    {introCheat.phase === 'reacting' && (
+                                        <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                                            正面 {introCheat.heads}/{introCheat.coins} 枚——被抓住了！{charNameOf(a.charId === 'user' ? b.charId : a.charId)} 正在表态…
+                                        </div>
+                                    )}
+                                    {(introCheat.phase === 'caught' || introCheat.phase === 'aborted') && (
+                                        <>
+                                            <div className="text-[11px] font-bold text-slate-700">
+                                                {introCheat.phase === 'caught' ? '对手的表态：' : '对手中断了这场对战'}
+                                            </div>
+                                            {introCheat.reaction && <div className="text-[10px] text-slate-600 leading-relaxed">「{introCheat.reaction}」</div>}
+                                            {introCheat.phase === 'aborted' && introCheat.abortMsg && (
+                                                <div className="text-[10px] text-slate-500 leading-relaxed border-t border-[#AFA3A1]/40 pt-1.5">
+                                                    TA 给你发了条私聊：「{introCheat.abortMsg}」（红点/小窗可看，本场作废不结算）
+                                                </div>
+                                            )}
+                                            {introCheat.phase === 'caught' && (
+                                                <div className="grid grid-cols-2 gap-2 pt-1">
+                                                    <button onClick={continueAfterCaught} className="py-2 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98]">继续对战</button>
+                                                    <button onClick={() => { setBattleIntro(null); setIntroCheat(null); }} className="py-2 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">不打了</button>
+                                                </div>
+                                            )}
+                                            {introCheat.phase === 'aborted' && (
+                                                <button onClick={() => { setBattleIntro(null); setIntroCheat(null); }} className="w-full py-2 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">知道了</button>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                            {!introCheat && (
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={() => startWithCheat(true)} disabled={battleIntro.npcPick?.loading}
+                                        className="py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98] shadow-sm disabled:opacity-50">
+                                        出千（{Math.max(10, Math.round(Math.max(10, cheatCost) / 10) * 10)} 金币）
+                                    </button>
+                                    <button onClick={() => startWithCheat(false)} disabled={battleIntro.npcPick?.loading}
+                                        className="py-2.5 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98] disabled:opacity-50">
+                                        正常打
+                                    </button>
+                                </div>
+                            )}
+                            <div className="text-center text-[10px] text-slate-400">
+                                {introCheat ? '（流程进行中）' : battleIntro.npcPick?.loading ? '（等对手选完宠物）' : '点弹窗外的空白处 = 放弃本场对战'}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* ⑦ 受击差分编辑弹窗：给宠物配「被命中」瞬间的替换形象（图片或颜文字/点阵） */}
+            {hurtEditPet && (() => {
+                const pet = hurtEditPet;
+                return (
+                    <div className="fixed inset-0 z-[230] bg-black/50 flex items-center justify-center p-6" onClick={() => setHurtEditPet(null)}>
+                        <div className="w-full max-w-xs rounded-2xl bg-white p-4 space-y-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center gap-2">
+                                <PetVisual pet={pet} size="w-10 h-10" boxPx={40} />
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-black text-slate-800 truncate">{pet.name} 的受击差分</div>
+                                    <div className="text-[9px] text-slate-400">被命中的那一拍切换成的形象；不配就用通用受伤颜</div>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">受击图片（优先于颜文字）</label>
+                                <div className="flex gap-2 items-center">
+                                    <input ref={hurtFileRef} type="file" accept="image/*" className="hidden"
+                                        onChange={async e => { const f = e.target.files?.[0]; if (!f) return; try { const base64 = await processImage(f, { maxWidth: 400, quality: 0.8 }); const ref = await migrateDataUrlToRef(base64); setHurtImageDraft(ref); addToast('图片已入库', 'success'); } catch { addToast('图片处理失败', 'error'); } }} />
+                                    <button onClick={() => hurtFileRef.current?.click()} className="flex-1 py-2 rounded-xl bg-[#E9E8DB] text-slate-600 text-xs font-bold active:scale-[0.98]">{hurtImageDraft ? '换一张' : '上传图片'}</button>
+                                    {hurtImageDraft && <button onClick={() => setHurtImageDraft(undefined)} className="px-2 py-2 rounded-xl bg-slate-200 text-slate-500 text-xs font-bold">清除</button>}
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">受击颜文字 / 点阵（无图时用；空 = 通用受伤颜）</label>
+                                <textarea value={hurtKaomojiDraft} onChange={e => setHurtKaomojiDraft(e.target.value)} rows={4}
+                                    className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button onClick={async () => { const next = { ...pet, hurtImageRef: hurtImageDraft, hurtKaomoji: hurtKaomojiDraft.trim() || undefined }; await DB.savePet(next); setPets(prev => prev.map(p => p.id === pet.id ? next : p)); setHurtEditPet(null); addToast(`「${pet.name}」的受击差分已保存`, 'success'); }}
+                                    className="py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-xs font-bold active:scale-[0.98]">保存</button>
+                                <button onClick={() => setHurtEditPet(null)} className="py-2.5 rounded-xl bg-slate-200 text-slate-600 text-xs font-bold active:scale-[0.98]">取消</button>
+                            </div>
                         </div>
                     </div>
                 );
@@ -1686,24 +2109,49 @@ const PetPvpApp: React.FC = () => {
                                     );
                                 })()}
                             </div>
-                            {/* API 设置：抽卡 / 战报各自选预设，不设 = 主聊天 API */}
+                            {/* ⑧ API 设置：每个调用点各自选预设，不设 = 主聊天 API；一键设为相同=用户主动点 */}
                             <div className="pt-2 border-t border-slate-100">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">API 设置（独立于群聊/私聊）</label>
-                                {([['gacha', '抽卡评价 API'], ['battle', '战报播报 API']] as Array<['gacha' | 'battle', string]>).map(([purpose, label]) => {
-                                    const key = purpose === 'gacha' ? 'apiPresetIdGacha' : 'apiPresetIdBattle' as const;
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">API 设置（每个调用点独立，不影响群聊/私聊）</label>
+                                {([
+                                    ['apiPresetIdGacha', '抽卡评价'],
+                                    ['apiPresetIdBattle', '战报播报（导演/轮调）'],
+                                    ['apiPresetIdPetPick', 'NPC 选宠心声'],
+                                    ['apiPresetIdCheatReact', '出千被抓·对手反应'],
+                                    ['apiPresetIdCheatAbort', '出千中断解释'],
+                                    ['apiPresetIdPunish', '轮盘惩罚回应'],
+                                    ['apiPresetIdPunishWinner', '你败·胜者围观'],
+                                    ['apiPresetIdRvr', 'NPC 互打吐槽'],
+                                ] as Array<[string, string]>).map(([key, label]) => {
                                     return (
-                                    <div key={purpose} className="mb-2">
+                                    <div key={key} className="mb-2">
                                         <div className="text-[10px] font-bold text-slate-500 mb-1">{label}</div>
-                                        <select value={meta[key] || ''}
-                                            onChange={async e => { const next = { ...meta, [key]: e.target.value || undefined }; setMeta(next); await DB.savePetMeta(next); }}
+                                        <select value={(meta as any)[key] || ''}
+                                            onChange={async e => { const next = { ...meta, [key]: e.target.value || undefined } as PetMeta; setMeta(next); await DB.savePetMeta(next); }}
                                             className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none">
                                             <option value="">不设置（用主聊天 API）</option>
                                             {apiPresets.map(ps => <option key={ps.id} value={ps.id}>{ps.name}（{ps.config.model || '默认模型'}）</option>)}
                                         </select>
-                                        <p className="text-[9px] text-slate-400 mt-0.5">从预设列表选择；战报/抽卡互不影响。</p>
                                     </div>
                                     );
                                 })}
+                                {/* 一键设为相同：以「战报播报」的预设为准统一全部调用点（用户主动点才生效） */}
+                                <button onClick={async () => {
+                                    const src = meta.apiPresetIdBattle;
+                                    if (!src) { addToast('先在「战报播报」里选一个预设，再用它统一其他调用点', 'error'); return; }
+                                    const next: PetMeta = {
+                                        ...meta,
+                                        apiPresetIdGacha: src, apiPresetIdPetPick: src, apiPresetIdCheatReact: src,
+                                        apiPresetIdCheatAbort: src, apiPresetIdPunish: src, apiPresetIdPunishWinner: src, apiPresetIdRvr: src,
+                                    };
+                                    setMeta(next);
+                                    await DB.savePetMeta(next);
+                                    const ps = apiPresets.find(p => p.id === src);
+                                    addToast(`已把所有调用点统一为「${ps?.name || src}」`, 'success');
+                                }}
+                                    className="w-full py-1.5 rounded-lg border border-[#AFA3A1]/70 text-slate-500 text-[10px] font-bold">
+                                    一键设为相同（以「战报播报」选中的预设统一全部调用点）
+                                </button>
+                                <p className="text-[9px] text-slate-400 mt-1">不设的调用点回落主聊天 API；「一键」只在你主动点的时候生效。</p>
                             </div>
                             {/* 提示词发送顺序可视化 + 编辑 */}
                             <div className="pt-2 border-t border-slate-100">
@@ -1755,6 +2203,40 @@ const PetPvpApp: React.FC = () => {
                                             <button onClick={async () => { const next = { ...meta, promptBetStake: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认压金提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
                                         </div>
                                     )}
+                                    <div className="text-center text-slate-300">↓</div>
+                                    <div className="flex gap-1.5">
+                                        <button onClick={() => setPromptTab('petPick')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'petPick' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-[#AFA3A1]/40 text-slate-500'}`}>NPC 选宠提示词</button>
+                                        <button onClick={() => setPromptTab('cheat')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'cheat' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-[#AFA3A1]/40 text-slate-500'}`}>出千反应提示词</button>
+                                        <button onClick={() => setPromptTab('rvr')} className={`flex-1 py-2 rounded-lg border text-[11px] ${promptTab === 'rvr' ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-[#AFA3A1]/40 text-slate-500'}`}>NPC 互打提示词</button>
+                                    </div>
+                                    {promptTab === 'petPick' && (
+                                        <div className="space-y-1.5">
+                                            <p className="text-[9px] text-slate-400 leading-tight">你参战时对手按人设选宠物（调一次 API）。给 AI 的你的宠物信息只有名字和品级。占位符：{'{人设}{对手}{对手宠物}{对手品级}{候选列表}'}</p>
+                                            <textarea value={meta.promptPetPick || PROMPT_PET_PICK_DEFAULT} onChange={async e => { const next = { ...meta, promptPetPick: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={7}
+                                                className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                                            <button onClick={async () => { const next = { ...meta, promptPetPick: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认选宠提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
+                                        </div>
+                                    )}
+                                    {promptTab === 'cheat' && (
+                                        <div className="space-y-1.5">
+                                            <p className="text-[9px] text-slate-400 leading-tight">出千失败被抓包后发给对手，让 TA 按人设表态并判断是否继续。占位符：{'{人设}{玩家}{金额}{我方宠物}'}</p>
+                                            <textarea value={meta.promptCheatReact || PROMPT_CHEAT_REACT_DEFAULT} onChange={async e => { const next = { ...meta, promptCheatReact: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={7}
+                                                className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                                            <button onClick={async () => { const next = { ...meta, promptCheatReact: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认出千反应提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
+                                            <p className="text-[9px] text-slate-400 leading-tight pt-1">对手决定中断对战时，再调一次让 TA 向你解释原因（发私聊）。占位符：{'{人设}{玩家}'}</p>
+                                            <textarea value={meta.promptCheatAbort || PROMPT_CHEAT_ABORT_DEFAULT} onChange={async e => { const next = { ...meta, promptCheatAbort: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={6}
+                                                className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                                            <button onClick={async () => { const next = { ...meta, promptCheatAbort: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认中断解释提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
+                                        </div>
+                                    )}
+                                    {promptTab === 'rvr' && (
+                                        <div className="space-y-1.5">
+                                            <p className="text-[9px] text-slate-400 leading-tight">NPC 互打结束后各自发一条（发共同群聊，没有群则私发给你）。占位符：{'{人设}{我方宠物}{对方主人}{对方宠物}{结果}'}</p>
+                                            <textarea value={meta.promptRvrTalk || PROMPT_RVR_TALK_DEFAULT} onChange={async e => { const next = { ...meta, promptRvrTalk: e.target.value }; setMeta(next); await DB.savePetMeta(next); }} rows={6}
+                                                className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
+                                            <button onClick={async () => { const next = { ...meta, promptRvrTalk: undefined }; setMeta(next); await DB.savePetMeta(next); addToast('已恢复默认互打提示词', 'success'); }} className="text-[9px] text-slate-500 flex items-center gap-1"><IcoReset className="w-3 h-3" /> 恢复默认</button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             {/* 对战设置 */}
@@ -1769,19 +2251,16 @@ const PetPvpApp: React.FC = () => {
                                     ))}
                                 </div>
                                 <p className="text-[9px] text-slate-400 mb-2 leading-tight">导演 = 一次 API 直接写整段感言；轮调 = 败者、胜者各自单独调用一次 API 轮流发言。</p>
-                                {/* 出千概率 */}
-                                <div className="flex items-center gap-2 mb-2">
-                                    <span className="text-[10px] text-slate-400 w-14">出千成功率</span>
-                                    <input type="number" min={0} max={100} value={meta.cheatSuccessRate ?? 65}
-                                        onChange={async e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)); const next = { ...meta, cheatSuccessRate: v }; setMeta(next); await DB.savePetMeta(next); }}
-                                        className="w-20 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none tabular-nums" />
-                                    <span className="text-[10px] text-slate-400 ml-2 w-14">被抓住率</span>
-                                    <input type="number" min={0} max={100} value={meta.cheatCaughtRate ?? 35}
-                                        onChange={async e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0)); const next = { ...meta, cheatCaughtRate: v }; setMeta(next); await DB.savePetMeta(next); }}
-                                        className="w-20 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none tabular-nums" />
-                                    <span className="text-[10px] text-slate-400">%</span>
+                                {/* 出千机制说明（③ 金币化后不再有可调概率——成功率由硬币数决定） */}
+                                <div className="rounded-lg bg-[#F9FBF5] border border-[#AFA3A1]/40 px-3 py-2 mb-2">
+                                    <div className="text-[10px] font-bold text-slate-500 mb-0.5">出千机制（金币制）</div>
+                                    <p className="text-[9px] text-slate-400 leading-tight">
+                                        投入 N 金币（10 的倍数）= N/10 枚硬币，每枚正反面概率一致，掷完一次性判定：
+                                        正面 ≥5 枚 → 出千成功，你的宠物一项属性提升 50%（本场），对手不知情；
+                                        正面 &lt;5 枚 → 失败且<b>必被发现</b>，对手按人设表态（揭发/无视/溺爱/无奈）并自行判断继续或中断对战（中断则 TA 私聊你解释原因，本场作废）。
+                                        硬币越多成功率越高：10 枚约 62%、20 枚约 88%、30 枚约 97%。
+                                    </p>
                                 </div>
-                                <p className="text-[9px] text-slate-400">成功且没被抓 → 下一回合起随机 暴击/敏捷/闪避 翻倍 2 回合；成功但被抓 → 翻倍取消；失败 → 无事发生。都会写进战况。</p>
                             </div>
                             {/* 败者惩罚 */}
                             <div className="pt-2 border-t border-slate-100">
@@ -2021,10 +2500,14 @@ const PetPvpApp: React.FC = () => {
                                                         <button onClick={async () => { await setDefaultPet('user', pet.id); addToast(`你的默认出战宠物改为「${pet.name}」（对战时你出它，对手自动匹配同级）`, 'success'); }}
                                                             className="shrink-0 px-2 py-1 rounded-lg bg-white border border-[#AFA3A1]/40 text-[9px] font-bold text-slate-500 active:scale-95">设为我的出战</button>
                                                     )}
+                                                    {row.id === 'user' && (
+                                                        <button onClick={() => { setHurtEditPet(pet); setHurtKaomojiDraft(pet.hurtKaomoji || ''); setHurtImageDraft(pet.hurtImageRef); }}
+                                                            className="shrink-0 px-2 py-1 rounded-lg bg-white border border-[#AFA3A1]/40 text-[9px] font-bold text-slate-500 active:scale-95">差分</button>
+                                                    )}
                                                 </div>
                                             );
                                         })}
-                                        <p className="text-[9px] text-slate-400 px-1">对战规则：你参战时出你选的「默认出战」宠物（没选就出最高级），对手自动选同品级的那只（没有该级就取最接近的）；NPC 互打时各出最高品级。只有你能指定出战宠物。</p>
+                                        <p className="text-[9px] text-slate-400 px-1">对战规则：你参战时出你选的「默认出战」宠物（没选就出最高级），对手按人设选同品级的那只（没有该级就取最接近的）；NPC 互打时品级上限向仓库较低一方兼容、随机抽档就近匹配。只有你能指定出战宠物。单次伤害已收敛到 0-50 区间，对局更有来回感。</p>
                                     </div>
                                 </details>
                             ));
@@ -2035,15 +2518,17 @@ const PetPvpApp: React.FC = () => {
                 {/* ─── 对战 ─── */}
                 {tab === 'battle' && (
                     <div className="space-y-4">
+                        {/* ① 战斗页面（逐拍回放）在对战区域——「开始对战」设置卡片挪到它下方 */}
+                        {renderArena()}
                         <div className="bg-white rounded-2xl p-4 border border-[#AFA3A1]/40/70 space-y-3">
                             <div className="flex gap-1 bg-[#E9E8DB] rounded-lg p-1">
                                 {([['avb', 'A vs B'], ['avs', 'A vs 随机'], ['rvr', '随机 vs 随机']] as Array<[typeof mode, string]>).map(([id, label]) => (
                                     <button key={id} onClick={() => setMode(id)} className={`flex-1 py-1.5 rounded text-[10px] font-bold ${mode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
                                 ))}
                             </div>
-                            {/* 对阵标注（你参战=你的默认宠物为基准，对手自动同级匹配；NPC互打=各自最高级） */}
+                            {/* 对阵标注（你参战=你的默认宠物为基准，对手按人设选同档；NPC互打=低仓兼容+随机抽档） */}
                             {mode === 'rvr' ? (
-                                            <p className="text-[11px] font-bold text-slate-500 text-center bg-[#F9FBF5] rounded-xl py-2 flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 脚本将随机匹配两位有宠物的角色（各出最高品级）</p>
+                                            <p className="text-[11px] font-bold text-slate-500 text-center bg-[#F9FBF5] rounded-xl py-2 flex items-center justify-center gap-1.5"><IcoDice className="w-3.5 h-3.5" /> 脚本随机匹配两位角色：品级上限向仓库较低一方兼容，各自随机抽档就近对战</p>
                             ) : (() => {
                                 // 预览逻辑与实战 resolveSides 一致：user 参战 → NPC 按 user 出战宠档就近匹配
                                 const aId = sideAChar || 'user';
@@ -2055,7 +2540,7 @@ const PetPvpApp: React.FC = () => {
                                 return (
                                 <p className="text-[11px] font-bold text-slate-600 text-center bg-[#F9FBF5] rounded-xl py-2">
                                     A方 {sideAChar ? `${charNameOf(aId)}·${aName}` : '自动'} VS B方 {mode === 'avb' && sideBChar ? `${charNameOf(bId)}·${bName}` : '自动'}
-                                    <span className="ml-1.5 text-[9px] font-normal text-slate-400">{userIn ? '（你出默认宠物，对手自动选同级）' : '（各出最高品级）'}</span>
+                                    <span className="ml-1.5 text-[9px] font-normal text-slate-400">{userIn ? '（你出默认宠物，对手选同级）' : '（品级向低仓兼容，随机抽档）'}</span>
                                 </p>
                                 );
                             })()}
@@ -2078,11 +2563,15 @@ const PetPvpApp: React.FC = () => {
                                 </div>
                             )}
                             {/* 押注：仅赌钱模式（轮盘模式不涉及金币押注） */}
-                            {(meta.punishMode || 'wheel') === 'bet' && (
+                            {(meta.punishMode || 'wheel') === 'bet' && (() => {
+                                // ② 押注分线：user 参战（含「自动选择」= user）→ 必须押（只能押 A 或 B，
+                                // 押对手赢也行——自己赢战斗但输掉押金也是一种玩法）；NPC 互打 → 可押可不押
+                                const userJoin = mode !== 'rvr' && (sideAChar === '' || sideAChar === 'user' || sideBChar === 'user');
+                                return (
                                 <div className="pt-2 border-t border-slate-100">
-                                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">押注（可选）</label>
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">{userJoin ? '押注（你参战，必押）' : '押注（可选）'}</label>
                                     <div className="flex gap-2 items-center">
-                                        {(['a', 'b', null] as Array<'a' | 'b' | null>).map(s => (
+                                        {(userJoin ? (['a', 'b'] as Array<'a' | 'b'>) : (['a', 'b', null] as Array<'a' | 'b' | null>)).map(s => (
                                             <button key={String(s)} onClick={() => setBetSide(s)}
                                                 className={`flex-1 py-2 rounded-xl text-[10px] font-bold border transition-all ${betSide === s ? 'border-[#AFA3A1] bg-[#E9E8DB] text-[#3a3a36]' : 'border-[#AFA3A1]/40 text-slate-500'}`}>
                                                 {s === 'a' ? '押 A 赢' : s === 'b' ? (mode === 'avb' ? '押 B 赢' : '押对手赢') : '不押注'}
@@ -2090,12 +2579,13 @@ const PetPvpApp: React.FC = () => {
                                         ))}
                                     </div>
                                     {betSide && (
-                                        <input type="number" min={1} value={betAmount} onChange={e => setBetAmount(Math.max(1, parseInt(e.target.value) || 1))}
+                                        <input type="number" min={100} step={10} value={betAmount} onChange={e => setBetAmount(Math.max(100, parseInt(e.target.value) || 100))}
                                             className="w-full mt-2 px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none" />
                                     )}
-                                    <p className="text-[9px] text-slate-400 mt-1">赔率由脚本预演 200 局的胜率决定（冷门赔得高），开战后自动结算。</p>
+                                    <p className="text-[9px] text-slate-400 mt-1">{userJoin ? '你参战的场次必须押注（100 金币起步）。押注金额会写进对手的记忆——TA 知道你押了多少。' : '赔率由脚本预演 200 局的胜率决定（冷门赔得高），开战后自动结算。'}</p>
                                 </div>
-                            )}
+                                );
+                            })()}
                             <button onClick={startBattle} disabled={battling}
                                 className={`w-full py-3 rounded-2xl font-bold transition-all ${battling ? 'bg-slate-300 text-slate-500' : 'bg-[#DAD8C0] text-[#3a3a36] active:scale-[0.98]'}`}>
                                 {battling ? '战斗结算中…' : mode === 'rvr'
@@ -2103,9 +2593,6 @@ const PetPvpApp: React.FC = () => {
                                     : <span className="flex items-center justify-center gap-1.5"><IcoSwords className="w-4 h-4" /> 开始对战</span>}
                             </button>
                         </div>
-
-                        {/* 战斗页面（逐拍回放） */}
-                        {renderArena()}
                     </div>
                 )}
 

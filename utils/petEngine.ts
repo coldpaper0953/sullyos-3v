@@ -8,7 +8,8 @@
  *   品级攻击加成：A+20 / B+15 / C+10 / D+5 / E+0
  *   攻速/闪避/暴击：随机分配，总和 = totalStatPoints（默认 30，可调）
  *   血量：200 + 品级加成 + rand(0~80)，硬上限 300
- *   命中判定：闪避% 完全闪避；暴击% ×1.5；伤害 = 攻击 × (0.85~1.15)
+ *   命中判定：闪避% 完全闪避；暴击% ×1.5；伤害 = 攻击 × (0.85~1.15) ÷ 3，
+ *             封顶 50（0-50 区间——品级差异体现在攻击力上，暴击同样封顶）
  *   回合：攻速高者先手；每次攻击后攻击方有 攻速% 概率保留回合继续攻击
  *         （否则轮到对方），每次保留回合最多连击 4 次防死循环
  *   终局：血量归零，或 maxRounds（默认 30）回合后按剩余血量比例判胜
@@ -45,6 +46,8 @@ export interface PetCombatant {
     maxHp: number;
     imageRef?: string;
     kaomoji?: string;
+    hurtImageRef?: string;  // 受击差分：被命中瞬间切换的图片（空 = 沿用 imageRef）
+    hurtKaomoji?: string;   // 受击差分：被命中瞬间切换的颜文字/点阵（空 = 沿用 kaomoji）
     desc?: string;
 }
 
@@ -118,6 +121,8 @@ export function buildCombatant(
         hp: pet.hp, maxHp: pet.hp,
         imageRef: pet.imageRef,
         kaomoji: pet.kaomoji,
+        hurtImageRef: pet.hurtImageRef,
+        hurtKaomoji: pet.hurtKaomoji,
         desc: pet.desc,
     };
 }
@@ -142,9 +147,9 @@ export interface BattleEvent {
 /**
  * 回合制战斗模拟。sideA/sideB 为双方战斗体；totalStatPoints 用于文案说明。
  * 追击机制：每次攻击后攻击方有 spd% 概率保留回合继续攻击（单回合内最多连击 4 次）。
- * openingCheat：开场出千（user 战前选「出千」时传）——buff 有值时属性翻倍从第 1 回合
- * 生效直到 untilRound（BATTLE_MAX_ROUNDS+1 = 全场）；被抓/搞砸时 buff 为空、只播一条
- * cheat 事件把战况写进日志。
+ * openingCheat：开场出千（user 战前选「出千」时传）——buff 有值时属性加成（×1.5）
+ * 从第 1 回合生效直到 untilRound（BATTLE_MAX_ROUNDS+1 = 全场）；被抓/搞砸时 buff
+ * 为空、只播一条 cheat 事件把战况写进日志。
  */
 export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRounds = 30, openingCheat?: {
     buff: CheatBuff;
@@ -156,10 +161,10 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
         events.push({ kind, atkSide, round, text, hpA: hpA, hpB: hpB, dmg });
     };
     let hpA = sideA.hp, hpB = sideB.hp;
-    // 开场出千：第 1 回合起翻倍生效（与 simulateContinue 的 buffed 同口径）
+    // 开场出千：第 1 回合起加成生效（×1.5，与 simulateContinue 的 buffed 同口径）
     const cheat = openingCheat?.buff;
     const buffed = (isA: boolean, base: number) =>
-        cheat && cheat.untilRound >= 1 && ((cheat.side === 'a') === isA) ? base * 2 : base;
+        cheat && cheat.untilRound >= 1 && ((cheat.side === 'a') === isA) ? Math.round(base * 1.5) : base;
     const effCrit = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).crit);
     const effSpd = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).spd);
     const effDodge = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).dodge);
@@ -194,7 +199,9 @@ export function simulateBattle(sideA: PetCombatant, sideB: PetCombatant, maxRoun
                 pushEvent('dodge', attackerIsA ? 'a' : 'b', round, t);
             } else {
                 const isCrit = Math.random() * 100 < effCrit(attackerIsA);
-                const dmg = Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1)));
+                // 0-50 区间：品级差异体现在 atk 上，除以 3 再封顶——A 级打 E 级也从
+                // 「两回合秒杀」变成「打满全场」，对战有来回感（暴击 ×1.5 后同样封顶 50）
+                const dmg = Math.min(50, Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1) / 3)));
                 deal(attackerIsA, dmg);
                 const t = `第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`;
                 rounds.push(t);
@@ -266,7 +273,7 @@ export interface CheatBuff {
     untilRound: number;     // 该回合（含）之前生效
 }
 
-/** 从中间状态续打：属性翻倍 buff 只影响 crit/spd/dodge（攻击不变），到 untilRound 回合为止 */
+/** 从中间状态续打：出千加成 buff（×1.5）只影响 crit/spd/dodge（攻击不变），到 untilRound 回合为止 */
 export function simulateContinue(
     sideA: PetCombatant,
     sideB: PetCombatant,
@@ -282,7 +289,7 @@ export function simulateContinue(
         events.push({ kind, atkSide, round, text, hpA, hpB, dmg });
     };
     const buffed = (isA: boolean, base: number) =>
-        buff && buff.untilRound >= round && ((buff.side === 'a') === isA) ? base * 2 : base;
+        buff && buff.untilRound >= round && ((buff.side === 'a') === isA) ? Math.round(base * 1.5) : base;
     const effCrit = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).crit);
     const effSpd = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).spd);
     const effDodge = (isA: boolean) => buffed(isA, (isA ? sideA : sideB).dodge);
@@ -306,7 +313,9 @@ export function simulateContinue(
                 pushEvent('dodge', attackerIsA ? 'a' : 'b', round, t);
             } else {
                 const isCrit = Math.random() * 100 < effCrit(attackerIsA);
-                const dmg = Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1)));
+                // 0-50 区间：品级差异体现在 atk 上，除以 3 再封顶——A 级打 E 级也从
+                // 「两回合秒杀」变成「打满全场」，对战有来回感（暴击 ×1.5 后同样封顶 50）
+                const dmg = Math.min(50, Math.max(1, Math.round(atk.atk * (0.85 + Math.random() * 0.3) * (isCrit ? 1.5 : 1) / 3)));
                 deal(attackerIsA, dmg);
                 const t = `第${round}回合：${atk.name} 命中 ${def.name}，造成 ${dmg} 点伤害${isCrit ? '（暴击！）' : ''}。${def.name} 剩余 HP ${hpOf(!attackerIsA)}。`;
                 rounds.push(t);
