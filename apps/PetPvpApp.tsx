@@ -318,8 +318,21 @@ const PetPvpApp: React.FC = () => {
     const [tplName, setTplName] = useState('');
     const [tplKaomoji, setTplKaomoji] = useState('');
     const [tplWeight, setTplWeight] = useState(30);
+    // 模板的受击差分（canvas：宠物池子下挂「user 可上传拆分图片/点阵」入口）——入池带上、抽中继承
+    const [tplHurtKaomoji, setTplHurtKaomoji] = useState('');
+    const [tplHurtImageRef, setTplHurtImageRef] = useState<string | undefined>();
     const tplFileRef = useRef<HTMLInputElement>(null);
     const [tplImageRef, setTplImageRef] = useState<string | undefined>();
+    const tplHurtFileRef = useRef<HTMLInputElement>(null);
+    // 模板受伤差分图上传：与普通形象图同一套入库流程（缩宽+migrateDataUrlToRef）
+    const handleTplHurtImage = async (f: File) => {
+        try {
+            const base64 = await processImage(f, { maxWidth: 400, quality: 0.8 });
+            const ref = await migrateDataUrlToRef(base64);
+            setTplHurtImageRef(ref);
+            addToast('受伤差分图已入库', 'success');
+        } catch { addToast('图片处理失败', 'error'); }
+    };
 
     // 对战状态
     const [mode, setMode] = useState<'avb' | 'avs' | 'rvr'>('avb');
@@ -339,10 +352,10 @@ const PetPvpApp: React.FC = () => {
         a: PetCombatant; b: PetCombatant; userSide: 'a' | 'b';
         npcPick?: { loading?: boolean; petName?: string; line?: string };
     }>(null);
-    // ③ 出千金币化的弹窗内状态机：flipping=掷硬币中 / reacting=NPC 情绪反应调用中 /
-    // caught=被抓包、NPC 决定继续（等 user 点「继续对战」）/ aborted=NPC 中断整场（收尾已完成）
+    // ③ 出千金币化的弹窗内状态机：flipping=硬币转圈动画中 / settled=硬币定格出结果、停留展示 /
+    // reacting=NPC 情绪反应调用中 / caught=被抓包、NPC 决定继续（等 user 点「继续对战」）/ aborted=NPC 中断整场（收尾已完成）
     const [introCheat, setIntroCheat] = useState<null | {
-        phase: 'flipping' | 'reacting' | 'caught' | 'aborted';
+        phase: 'flipping' | 'settled' | 'reacting' | 'caught' | 'aborted';
         coins: number; heads: number; cost: number;
         text?: string; reaction?: string; abortMsg?: string;
     }>(null);
@@ -674,11 +687,14 @@ const PetPvpApp: React.FC = () => {
             weight: Math.max(1, tplWeight),
             imageRef: tplImageRef,
             kaomoji: tplImageRef ? undefined : (tplKaomoji.trim() || '(=ↀωↀ=)'),
+            // canvas（宠物池子）：模板自带受击差分（图片/颜文字），抽到的新宠物继承
+            hurtImageRef: tplHurtImageRef,
+            hurtKaomoji: tplHurtImageRef ? undefined : (tplHurtKaomoji.trim() || undefined),
             createdAt: Date.now(),
         };
         await DB.savePet(tpl);
         setPets(prev => [...prev, tpl]);
-        setTplName(''); setTplKaomoji(''); setTplWeight(30); setTplImageRef(undefined);
+        setTplName(''); setTplKaomoji(''); setTplWeight(30); setTplImageRef(undefined); setTplHurtKaomoji(''); setTplHurtImageRef(undefined);
         addToast(`宠物模板「${tpl.name}」已入池`, 'success');
     };
     const handleDeleteTemplate = async (id: string) => {
@@ -1130,6 +1146,9 @@ const PetPvpApp: React.FC = () => {
         // 轮调=败者、胜者各调一次 API 按顺序落库（各说各话，先败后胜），共用 narrating 横幅。
         // 轮盘模式不出战后感言：整场唯一一次 API 是抽完转盘后的惩罚回应（对战→战报→抽轮盘→调用）。
         if ((meta.punishMode || 'wheel') === 'wheel') return;
+        // canvas 新要求：NPC 互打（不含 user）不需要战后感言区块——双方发言走私聊/群聊
+        // （rvr 吐槽块已带世界书+人设+记忆+战况注入），战斗页不再生成/显示感言。
+        if (arena.a.charId !== 'user' && arena.b.charId !== 'user') return;
         if (arena.record.narration) return;
         const replyMode = meta.battleReplyMode || 'director';
         if (replyMode === 'roundRobin') {
@@ -1279,9 +1298,16 @@ const PetPvpApp: React.FC = () => {
         await setGoldOf('user', userGold - cost);
         const coins = cost / 10;
         const heads = rollCheatCoins(coins);
+        // 硬币动画（canvas 新要求）：N 枚硬币转圈（每行 5 枚）翻转 cheatFlipSec 秒（0=设置里跳过），
+        // 定格成 ●(正面)/◌(反面)，结果停留 cheatResultSec 秒后弹窗消失进入下一步
+        const flipSec = Math.max(0, meta.cheatFlipSec ?? 6);
+        const resultSec = Math.max(0, meta.cheatResultSec ?? 3);
         setIntroCheat({ phase: 'flipping', coins, heads, cost });
-        await new Promise(rs => setTimeout(rs, 1200)); // 掷硬币演出
-        if (heads >= 5) {
+        if (flipSec > 0) await new Promise(rs => setTimeout(rs, flipSec * 1000)); // 硬币翻转动画
+        const won = heads >= 5;
+        setIntroCheat({ phase: 'settled', coins, heads, cost, text: won ? '出千成功！没有被察觉…' : '正面不够——被当场抓包！' });
+        if (resultSec > 0) await new Promise(rs => setTimeout(rs, resultSec * 1000)); // 定格结果停留
+        if (won) {
             // 成功：正面 ≥5，对手无法得知——一项属性 ×1.5 全场（引擎 buff 同口径）
             const stat = (['crit', 'spd', 'dodge'] as const)[Math.floor(Math.random() * 3)];
             const statName = stat === 'crit' ? '暴击' : stat === 'spd' ? '敏捷' : '闪避';
@@ -1844,9 +1870,40 @@ const PetPvpApp: React.FC = () => {
                             {/* 出千流程态：掷硬币 → NPC 反应 → 抓包继续/中断 */}
                             {introCheat && (
                                 <div className="rounded-xl bg-[#E9E8DB] border border-[#AFA3A1]/70 px-3 py-2.5 space-y-1.5">
-                                    {introCheat.phase === 'flipping' && (
-                                        <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5"><IcoCoin className="w-3.5 h-3.5 animate-spin" /> 掷 {introCheat.coins} 枚硬币中…</div>
-                                    )}
+                                    {(introCheat.phase === 'flipping' || introCheat.phase === 'settled') && (() => {
+                                        // 硬币转圈/定格动画（canvas：每行 5 枚左右；翻转中骰子样转圈，
+                                        // 定格后变 ●(正面)/◌(反面)，大小和文字一致；投太多显示不下时提示）
+                                        const coins = introCheat.coins;
+                                        const shown = Math.min(coins, 25); // 5 行 × 5 枚的展示位
+                                        const settled = introCheat.phase === 'settled';
+                                        const results = Array.from({ length: shown }, (_, i) => i < introCheat.heads);
+                                        return (
+                                            <div className="space-y-1">
+                                                <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                                                    {settled
+                                                        ? <span>{coins > shown ? `前 ${shown} 枚 · ` : ''}正面 {introCheat.heads}/{coins} 枚——{introCheat.text}</span>
+                                                        : <span className="flex items-center gap-1.5"><IcoCoin className="w-3.5 h-3.5 animate-spin" /> {coins} 枚硬币转起来了…</span>}
+                                                </div>
+                                                <div className="grid grid-cols-5 gap-1.5 justify-items-center py-1">
+                                                    {results.map((isHead, i) => (
+                                                        <span key={i}
+                                                            className={`inline-flex items-center justify-center w-[1.15rem] h-[1.15rem] rounded-full text-[11px] font-black leading-none border
+                                                                ${settled
+                                                                    ? isHead
+                                                                        ? 'bg-[#DAD8C0] border-[#AFA3A1] text-[#3a3a36]'
+                                                                        : 'bg-[#F9FBF5] border-[#AFA3A1]/50 text-[#8a8474]'
+                                                                    : 'bg-[#F9FBF5] border-[#AFA3A1]/70 text-[#8a8474] animate-pulse'}`}>
+                                                            {settled ? (isHead ? '●' : '◌') : '◍'}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                {coins > 25 && (
+                                                    <p className="text-[10px] font-bold text-[#8a8474] text-center">硬币太多展示不下了〒▽〒（{coins} 枚只演示前 25 枚）</p>
+                                                )}
+                                                {settled && <p className="text-[9px] text-slate-400 text-center">● 正面 · ◌ 反面</p>}
+                                            </div>
+                                        );
+                                    })()}
                                     {introCheat.phase === 'reacting' && (
                                         <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
                                             正面 {introCheat.heads}/{introCheat.coins} 枚——被抓住了！{charNameOf(a.charId === 'user' ? b.charId : a.charId)} 正在表态…
@@ -2009,6 +2066,19 @@ const PetPvpApp: React.FC = () => {
                                     <span className="text-[10px] text-slate-400">权重</span>
                                     <input type="number" min={1} value={tplWeight} onChange={e => setTplWeight(parseInt(e.target.value) || 1)} className="w-16 px-2 py-1.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-xs outline-none" />
                                 </div>
+                            </div>
+                            {/* canvas（宠物池子）：模板的受击差分——抽中的新宠物被命中时切这个形象 */}
+                            <div className="pt-2 border-t border-slate-100">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1.5">受击差分（可选）</label>
+                                <div className="flex gap-2 items-center mb-2">
+                                    <input ref={tplHurtFileRef} type="file" accept="image/*" className="hidden"
+                                        onChange={e => { const f = e.target.files?.[0]; if (f) handleTplHurtImage(f); e.target.value = ''; }} />
+                                    <button onClick={() => tplHurtFileRef.current?.click()} className="px-3 py-1.5 rounded-xl bg-[#E9E8DB] text-[11px] font-bold text-slate-600">{tplHurtImageRef ? '换受伤图' : '上传受伤图'}</button>
+                                    {tplHurtImageRef && <TokenImg value={tplHurtImageRef} className="w-9 h-9 rounded-lg object-cover" />}
+                                    {tplHurtImageRef && <button onClick={() => setTplHurtImageRef(undefined)} className="text-[#AFA3A1] hover:text-[#3a3a36] px-1 text-xs font-bold">×</button>}
+                                </div>
+                                <textarea value={tplHurtKaomoji} onChange={e => setTplHurtKaomoji(e.target.value)} placeholder="受伤颜文字 / 点阵（不传图时用；空 = 通用受伤颜）" rows={2}
+                                    className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
                             </div>
                             <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-sm font-bold active:scale-[0.98]">加入池子</button>
                             {templates.length > 0 && (
@@ -2260,6 +2330,17 @@ const PetPvpApp: React.FC = () => {
                                         正面 &lt;5 枚 → 失败且<b>必被发现</b>，对手按人设表态（揭发/无视/溺爱/无奈）并自行判断继续或中断对战（中断则 TA 私聊你解释原因，本场作废）。
                                         硬币越多成功率越高：10 枚约 62%、20 枚约 88%、30 枚约 97%。
                                     </p>
+                                    <div className="flex gap-2 items-center mt-2">
+                                        <label className="text-[9px] text-slate-500 font-bold shrink-0">翻转动画（秒）</label>
+                                        <input type="number" min={0} max={30} step={1} value={meta.cheatFlipSec ?? 6}
+                                            onChange={async e => { const next = { ...meta, cheatFlipSec: Math.max(0, Math.min(30, parseInt(e.target.value) || 0)) }; setMeta(next); await DB.savePetMeta(next); }}
+                                            className="w-14 px-2 py-1 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-[10px] outline-none tabular-nums" />
+                                        <label className="text-[9px] text-slate-500 font-bold shrink-0">结果停留（秒）</label>
+                                        <input type="number" min={0} max={30} step={1} value={meta.cheatResultSec ?? 3}
+                                            onChange={async e => { const next = { ...meta, cheatResultSec: Math.max(0, Math.min(30, parseInt(e.target.value) || 0)) }; setMeta(next); await DB.savePetMeta(next); }}
+                                            className="w-14 px-2 py-1 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-lg text-[10px] outline-none tabular-nums" />
+                                    </div>
+                                    <p className="text-[9px] text-slate-400 mt-1 leading-tight">翻转动画设 0 = 跳过动画直接出结果；金币超过 250（25 枚硬币）只演示前 25 枚并提示「展示不下」。</p>
                                 </div>
                             </div>
                             {/* 败者惩罚 */}

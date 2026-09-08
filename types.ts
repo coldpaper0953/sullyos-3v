@@ -4257,6 +4257,10 @@ export interface PetMeta {
     punishBetAmount?: number;   // 赌钱模式：败者赔给赢家的固定金额
     cheatSuccessRate?: number;  // 出千成功率 %（默认 65）
     cheatCaughtRate?: number;   // 出千被发现的概率 %（默认 35）
+    /** 出千硬币动画：翻转时长秒（默认 6；0 = 跳过动画直接出结果） */
+    cheatFlipSec?: number;
+    /** 出千硬币定格后结果的停留时长秒（默认 3，之后弹窗消失进入下一步） */
+    cheatResultSec?: number;
     promptGacha?: string;       // 抽卡评价提示词模板（占位符可替换）
     promptBattle?: string;      // 战报播报提示词模板（占位符可替换）
     modelMode?: 'sub' | 'main'; // AI 调用模型：sub=副API（默认）/ main=主聊天模型

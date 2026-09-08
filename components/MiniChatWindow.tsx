@@ -193,6 +193,11 @@ const MiniChatWindow: React.FC = () => {
                         .sully-mini-chat .sully-chat-header .sully-chat-trigger { padding: 4px !important; }
                         .sully-mini-chat .sully-chat-header .sully-chat-back svg,
                         .sully-mini-chat .sully-chat-header .sully-chat-trigger svg { width: 0.85rem !important; height: 0.85rem !important; }
+                        /* canvas：小窗里的气泡等比例缩小——字号/内边距/头像同步缩一号 */
+                        .sully-mini-chat .sully-bubble-ai, .sully-mini-chat .sully-bubble-user { padding: 6px 10px !important; font-size: 12px !important; }
+                        .sully-mini-chat .sully-chat-message { padding-left: 8px !important; padding-right: 8px !important; }
+                        .sully-mini-chat .sully-chat-message-avatar { width: 1.5rem !important; height: 1.5rem !important; }
+                        .sully-mini-chat .sully-emoji-msg { max-width: 56px !important; max-height: 56px !important; }
                     `}</style>
                     <div
                         onPointerDown={e => { dragOffsetRef.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }; setDragging(true); }}
