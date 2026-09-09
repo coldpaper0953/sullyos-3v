@@ -31,6 +31,33 @@ const mergeUsage = (total: Record<string, number>, usage: any) => {
     }
 };
 
+// 群聊单次请求超时：glm 等思考模型的长导演 prompt 偶发把连接吊在半空（几分钟无响应也无报错，
+// 用户只看到「正在输入」永远不消失）。3 分钟无响应视为挂死，自动重试一次；外部 signal
+// （用户点停止）仍然优先。
+const GROUP_REQUEST_TIMEOUT_MS = 180_000;
+
+const fetchWithGroupTimeout = async (url: string, init: RequestInit, externalSignal?: AbortSignal): Promise<Response> => {
+    for (let attempt = 0; ; attempt++) {
+        const ac = new AbortController();
+        let timeoutHandle: any = null;
+        if (externalSignal?.aborted) throw new DOMException('aborted', 'AbortError');
+        const onExternalAbort = () => ac.abort(new DOMException('aborted', 'AbortError'));
+        externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+        timeoutHandle = setTimeout(() => ac.abort(new Error(`群聊请求超时（${GROUP_REQUEST_TIMEOUT_MS / 1000} 秒无响应）`)), GROUP_REQUEST_TIMEOUT_MS);
+        try {
+            return await fetch(url, { ...init, signal: ac.signal });
+        } catch (e: any) {
+            const isTimeout = !externalSignal?.aborted && /超时|timeout/i.test(String(e?.message || e));
+            // 超时且还有重试机会：再试一次；其余（用户中止/网络错误到最后一次）原样抛
+            if (isTimeout && attempt < 1) continue;
+            throw e;
+        } finally {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            externalSignal?.removeEventListener('abort', onExternalAbort);
+        }
+    }
+};
+
 /**
  * 群聊专用的通用 MCP completion：在群聊原有提示词外只增加工具注入、客户端
  * tools/call 循环和正文兼容兜底，最终仍返回标准 chat/completions 响应。
@@ -40,12 +67,11 @@ export async function completeGroupChatWithMcp(options: GroupMcpCompletionOption
     const usageTotal: Record<string, number> = {};
 
     const request = async (body: Record<string, any>): Promise<any> => {
-        const response = await fetch(options.url, {
+        const response = await fetchWithGroupTimeout(options.url, {
             method: 'POST',
             headers: options.headers,
             body: JSON.stringify(body),
-            signal: options.signal,
-        });
+        }, options.signal);
         if (!response.ok) {
             const preview = await response.text().catch(() => '');
             throw new Error(`API 返回 ${response.status}${preview ? `: ${preview.slice(0, 160)}` : ''}`);
