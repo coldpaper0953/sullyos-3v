@@ -10,6 +10,7 @@ import {
 } from '../utils/petEngine';
 import { migrateDataUrlToRef } from '../utils/blobRef';
 import { processImage } from '../utils/file';
+import { useMusic } from '../context/MusicContext';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import TokenImg from '../components/os/TokenImg';
@@ -396,6 +397,30 @@ const PetPvpApp: React.FC = () => {
     const hurtFileRef = useRef<HTMLInputElement>(null);
     // 抽卡动画本地上传（设置弹窗图片模式）：与差分图同一套 processImage+migrateDataUrlToRef 入库
     const drawAnimFileRef = useRef<HTMLInputElement>(null);
+    // 战斗 BGM：配置了 URL 且战斗页打开时自动播放；音乐卡片（MusicContext）在放时让位；
+    // 顶栏金币旁可手动 关闭/恢复 + 重播；留空 = 无 BGM。
+    // bgmManual = 用户点过「重播」的明确播放意图：即使已退出战斗页也继续放（再按暂停才停）
+    const { current: musicCurrent, playing: musicPlaying } = useMusic();
+    const bgmAudioRef = useRef<HTMLAudioElement>(null);
+    const [bgmPaused, setBgmPaused] = useState(false);
+    const [bgmManual, setBgmManual] = useState(false);
+    const bgmShouldPlay = (!!arena && !!meta.battleBgmUrl && !bgmPaused && !(musicCurrent && musicPlaying))
+        || (!!meta.battleBgmUrl && !bgmPaused && bgmManual);
+    useEffect(() => {
+        const el = bgmAudioRef.current;
+        if (!el) return;
+        if (bgmShouldPlay) { el.volume = 0.45; el.play().catch(() => { /* 自动播放被浏览器策略拦下时静默，用户点重播即可 */ }); }
+        else el.pause();
+    }, [bgmShouldPlay]);
+    const bgmReplay = () => {
+        const el = bgmAudioRef.current;
+        if (!el || !meta.battleBgmUrl) return;
+        setBgmPaused(false);
+        setBgmManual(true);
+        el.currentTime = 0;
+        el.volume = 0.45;
+        el.play().catch(() => {});
+    };
 
     const charNameOf = (id: string) => id === 'user' ? (userProfile.name || '我') : (characters.find(c => c.id === id)?.name || '未知');
     const charAvatarOf = (id: string) => id === 'user' ? userProfile.avatar : characters.find(c => c.id === id)?.avatar;
@@ -1829,6 +1854,8 @@ const PetPvpApp: React.FC = () => {
 
     return (
         <div className="h-full w-full flex flex-col bg-[#F9FBF5] font-sans relative overflow-hidden">
+            {/* 战斗 BGM：战斗页打开自动播放（音乐卡片在放时让位），顶栏可关/重播；关战斗页即停 */}
+            {meta.battleBgmUrl && <audio ref={bgmAudioRef} src={meta.battleBgmUrl} loop hidden />}
             {/* 抽卡动画弹窗：点抽签立即出现（不等 API），点背景可跳过 → 结果卡另开一张 */}
             {animScene && (
                 <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-6" onClick={() => { setAnimScene(null); setResultModal(cur => cur ?? { pet: animScene.pet }); }}>
@@ -2346,6 +2373,14 @@ const PetPvpApp: React.FC = () => {
                                     );
                                 })()}
                             </div>
+                            {/* 战斗 BGM：留空 = 不放；开战斗页自动播放，音乐卡片在放时让位；顶栏可关/重播 */}
+                            <div className="pt-2 border-t border-slate-100">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">战斗 BGM</label>
+                                <input value={meta.battleBgmUrl || ''} onChange={async e => { const next = { ...meta, battleBgmUrl: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }}
+                                    placeholder="歌曲 URL（mp3 直链等；留空 = 不放）"
+                                    className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none" />
+                                <p className="text-[9px] text-slate-400 mt-1 leading-tight">点开战斗界面自动循环播放（音量 45%）；音乐卡片正在放歌时自动让位；顶栏金币旁可关闭/重播；关掉战斗页即停。</p>
+                            </div>
                             {/* ⑧ API 设置：每个调用点各自选预设，不设 = 主聊天 API；一键设为相同=用户主动点 */}
                             <div className="pt-2 border-t border-slate-100">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">API 设置（每个调用点独立，不影响群聊/私聊）</label>
@@ -2604,6 +2639,17 @@ const PetPvpApp: React.FC = () => {
                         ) : (
                             <button onClick={togglePunishMode} title="轮盘惩罚模式中（点击切回赌钱模式）"
                                 className="bg-[#E9E8DB] px-2.5 py-1 rounded-full active:scale-95"><IcoTarget className="w-3.5 h-3.5 text-slate-500" /></button>
+                        )}
+                        {meta.battleBgmUrl && (
+                            <>
+                                <button onClick={() => setBgmPaused(p => !p)}
+                                    title={bgmPaused ? '恢复战斗音乐' : '关闭战斗音乐（重播可再听）'}
+                                    className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 ${bgmPaused ? 'bg-slate-200 text-slate-400' : 'bg-[#E9E8DB] text-slate-600'}`}>
+                                    {bgmPaused ? '♪' : <span className="text-[10px] font-black">❚❚</span>}
+                                </button>
+                                <button onClick={bgmReplay} title="重播战斗音乐"
+                                    className="w-7 h-7 rounded-full bg-[#E9E8DB] text-slate-500 flex items-center justify-center active:scale-90"><span className="text-[11px] font-black">↻</span></button>
+                            </>
                         )}
                         <button onClick={() => setTplModalOpen(true)} title="宠物池模板管理"
                             className="w-7 h-7 rounded-full bg-[#E9E8DB] text-slate-500 flex items-center justify-center active:scale-90"><IcoDice className="w-3.5 h-3.5" /></button>

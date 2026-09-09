@@ -4252,6 +4252,7 @@ export interface PetMeta {
     drawAnimInterval?: number;  // 盲文帧轮换间隔毫秒（默认 280）
     defaultPetByChar?: Record<string, string>; // 每角色默认出战宠物（petId）；默认死了按抽取时间自动顺延
     narrationBannerText?: string; // 战后感言请求中的横幅文字
+    battleBgmUrl?: string;      // 战斗 BGM：歌曲 URL（留空 = 不放）；点开战斗界面自动播放，音乐卡片在放时让位
     punishMode?: 'wheel' | 'bet' | 'off'; // 败者惩罚模式：转盘 / 赌钱 / 关
     wheelItems?: Array<{ id: string; text: string; weight: number }>; // 转盘条目（内容+权重）
     punishBetAmount?: number;   // 赌钱模式：败者赔给赢家的固定金额
