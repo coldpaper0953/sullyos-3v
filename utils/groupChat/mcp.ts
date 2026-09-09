@@ -32,29 +32,46 @@ const mergeUsage = (total: Record<string, number>, usage: any) => {
 };
 
 // 群聊单次请求超时：glm 等思考模型的长导演 prompt 偶发把连接吊在半空（几分钟无响应也无报错，
-// 用户只看到「正在输入」永远不消失）。3 分钟无响应视为挂死，自动重试一次；外部 signal
-// （用户点停止）仍然优先。
+// 用户只看到「正在输入」永远不消失）。3 分钟无响应视为挂死；外部 signal（用户点停止）仍然优先。
 const GROUP_REQUEST_TIMEOUT_MS = 180_000;
+
+// 上游过载/限流（免费 glm 线路高峰期常见 503 cache_only_cold：大提示词=冷请求直接被拒）
+// ——自动退避重试：5 秒、15 秒后再各试一次（共 3 次尝试）；挂死超时只重试 1 次（避免 3×3 分钟太久）。
+const GROUP_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const GROUP_RETRY_DELAYS_MS = [5_000, 15_000];
+
+const groupRetryWait = (ms: number, externalSignal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    externalSignal?.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); }, { once: true });
+});
 
 const fetchWithGroupTimeout = async (url: string, init: RequestInit, externalSignal?: AbortSignal): Promise<Response> => {
     for (let attempt = 0; ; attempt++) {
+        if (externalSignal?.aborted) throw new DOMException('aborted', 'AbortError');
         const ac = new AbortController();
         let timeoutHandle: any = null;
-        if (externalSignal?.aborted) throw new DOMException('aborted', 'AbortError');
         const onExternalAbort = () => ac.abort(new DOMException('aborted', 'AbortError'));
         externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
         timeoutHandle = setTimeout(() => ac.abort(new Error(`群聊请求超时（${GROUP_REQUEST_TIMEOUT_MS / 1000} 秒无响应）`)), GROUP_REQUEST_TIMEOUT_MS);
+        let response: Response;
         try {
-            return await fetch(url, { ...init, signal: ac.signal });
+            response = await fetch(url, { ...init, signal: ac.signal });
         } catch (e: any) {
+            // 挂死超时：只多试 1 次（attempt 0 失败后）；用户中止原样抛
             const isTimeout = !externalSignal?.aborted && /超时|timeout/i.test(String(e?.message || e));
-            // 超时且还有重试机会：再试一次；其余（用户中止/网络错误到最后一次）原样抛
             if (isTimeout && attempt < 1) continue;
             throw e;
         } finally {
             if (timeoutHandle) clearTimeout(timeoutHandle);
             externalSignal?.removeEventListener('abort', onExternalAbort);
         }
+        // 上游过载类状态码：退避后重试（最多共 3 次尝试）
+        if (!response.ok && GROUP_RETRYABLE_STATUS.has(response.status) && attempt < GROUP_RETRY_DELAYS_MS.length) {
+            await response.text().catch(() => '');
+            await groupRetryWait(GROUP_RETRY_DELAYS_MS[attempt], externalSignal);
+            continue;
+        }
+        return response;
     }
 };
 
@@ -74,6 +91,10 @@ export async function completeGroupChatWithMcp(options: GroupMcpCompletionOption
         }, options.signal);
         if (!response.ok) {
             const preview = await response.text().catch(() => '');
+            // 503 = 免费线路过载拒绝（cache_only_cold），重试耗尽后给人话提示
+            if (response.status === 503) {
+                throw new Error('上游线路过载（503，已自动重试仍被拒）——等几分钟再点一次触发，或到设置里换条 API 线路');
+            }
             throw new Error(`API 返回 ${response.status}${preview ? `: ${preview.slice(0, 160)}` : ''}`);
         }
         const data = await safeResponseJson(response);
