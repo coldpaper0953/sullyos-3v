@@ -576,7 +576,8 @@ const PetPvpApp: React.FC = () => {
             poolTemplateId: hitTpl?.id,
             imageRef: hitTpl?.imageRef,
             kaomoji: hitTpl?.kaomoji,
-            // ⑦ 受击差分从模板继承；随机生成的宠物没配差分 → 战斗回放自动回落通用受伤颜
+            // ⑦ 受击差分从池子模板继承（模板自带 = 预设路线）；随机生成的宠物差分为空，
+            // 受击时显示常形象+边框变色（canvas：差分为空 = 无差分，不回落通用受伤颜）
             hurtImageRef: hitTpl?.hurtImageRef,
             hurtKaomoji: hitTpl?.hurtKaomoji,
             createdAt: Date.now(),
@@ -652,7 +653,7 @@ const PetPvpApp: React.FC = () => {
                                     { role: 'system', content: prompt },
                                     { role: 'user', content: '开抽！' },
                                 ],
-                                temperature: 0.9, max_tokens: 4096, stream: false,
+                                temperature: 0.9, max_tokens: 8192, stream: false,
                             }),
                         },
                         1, 60_000, { appName: '宠物对战', purpose: '抽卡评价' },
@@ -921,7 +922,7 @@ const PetPvpApp: React.FC = () => {
                         { role: 'system', content: prompt },
                         { role: 'user', content: '选你的出战宠物。' },
                     ],
-                    temperature: 0.9, max_tokens: 4096, stream: false,
+                    temperature: 0.9, max_tokens: 8192, stream: false,
                 }),
             },
             1, 90_000, { appName: '宠物对战', purpose: 'NPC选宠' },
@@ -1144,7 +1145,7 @@ const PetPvpApp: React.FC = () => {
                                                 { role: 'system', content: prompt },
                                                 { role: 'user', content: '说说吧。' },
                                             ],
-                                            temperature: 0.9, max_tokens: 4096, stream: false,
+                                            temperature: 0.9, max_tokens: 8192, stream: false,
                                         }),
                                     },
                                     1, 60_000, { appName: '宠物对战', purpose: '随机对战发言' },
@@ -1226,7 +1227,7 @@ const PetPvpApp: React.FC = () => {
                                             { role: 'system', content: persona },
                                             { role: 'user', content: prompt },
                                         ],
-                                        temperature: 0.9, max_tokens: 4096, stream: false,
+                                        temperature: 0.9, max_tokens: 8192, stream: false,
                                     }),
                                 },
                                 1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
@@ -1236,8 +1237,13 @@ const PetPvpApp: React.FC = () => {
                             if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
                         }
                         if (text) {
-                            lines.push(`${speaker.charName}：${text}`);
-                            npcLines.push({ charId: speaker.charId, text });
+                            // canvas：不代替 user 发言——AI 把「User：…」写进 NPC 段落时整段丢弃（与导演模式同款兜底）
+                            const userNameRe = new RegExp(`^\\s*(${(userProfile.name || 'User').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|User|用户)\\s*[（(:：]`);
+                            const clean = text.split('\n\n').map(seg => seg.trim()).filter(seg => seg && !userNameRe.test(seg.split('\n')[0])).join('\n\n').replace(/^\s*(User|用户)\s*[（(:：][^\n]*\n?/gm, '').trim();
+                            if (clean) {
+                                lines.push(`${speaker.charName}：${clean}`);
+                                npcLines.push({ charId: speaker.charId, text: clean });
+                            }
                         }
                     }
                 } catch { /* 失败 → 脚本战报兜底 */ }
@@ -1305,7 +1311,7 @@ const PetPvpApp: React.FC = () => {
                                     { role: 'system', content: prompt },
                                     { role: 'user', content: '请开始播报。' },
                                 ],
-                                temperature: 0.9, max_tokens: 4096, stream: false,
+                                temperature: 0.9, max_tokens: 8192, stream: false,
                             }),
                         },
                         1, 120_000, { appName: '宠物对战', purpose: '战后评价' },
@@ -1314,9 +1320,17 @@ const PetPvpApp: React.FC = () => {
                     const rawCn = (extractContent(d2) || '').trim();
                     if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '');
                 }
-                // canvas：不代替 user 发言——提示词已禁止，AI 不听话时把以用户名开头的行删掉兜底
-                const userName = userProfile.name || 'User';
-                text = text.split('\n').filter(line => !line.trim().startsWith(userName) && !/^\s*(User|用户)\s*[（(:：]/.test(line)).join('\n').trim();
+                // canvas：不代替 user 发言——提示词已禁止，AI 不听话时把用户名的整段发言删掉兜底。
+                // 按「段」删：用户名开头的段（到下一个「名字：」开头的段或文尾）整体丢弃，不只删标题行
+                const stripUserM = (raw: string, uname: string) => {
+                    const userNameRe = new RegExp(`^\\s*(${uname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|User|用户)\\s*[（(:：]`);
+                    return raw.split('\n\n').map(seg => seg.trim()).filter(seg => {
+                        if (!seg) return false;
+                        const firstLine = seg.split('\n')[0];
+                        return !userNameRe.test(firstLine);
+                    }).join('\n\n').replace(/^\s*(User|用户)\s*[（(:：][^\n]*\n?/gm, '').trim();
+                };
+                text = stripUserM(text, userProfile.name || 'User');
                 if (text) {
                     record.narration = text;
                     record.promptSent = prompt;
@@ -1425,7 +1439,7 @@ const PetPvpApp: React.FC = () => {
                             { role: 'system', content: prompt },
                             { role: 'user', content: '说说你的看法。' },
                         ],
-                        temperature: 0.9, max_tokens: 4096, stream: false,
+                        temperature: 0.9, max_tokens: 8192, stream: false,
                     }),
                 },
                 1, 90_000, { appName: '宠物对战', purpose: '出千被抓反应' },
@@ -1462,7 +1476,7 @@ const PetPvpApp: React.FC = () => {
                             { role: 'system', content: prompt },
                             { role: 'user', content: '说说吧。' },
                         ],
-                        temperature: 0.9, max_tokens: 4096, stream: false,
+                        temperature: 0.9, max_tokens: 8192, stream: false,
                     }),
                 },
                 1, 90_000, { appName: '宠物对战', purpose: '出千中断解释' },
@@ -1597,7 +1611,7 @@ const PetPvpApp: React.FC = () => {
                                 { role: 'system', content: prompt },
                                 { role: 'user', content: loserCharId !== 'user' ? '认罚吧。' : '说两句吧。' },
                             ],
-                            temperature: 0.9, max_tokens: 4096, stream: false,
+                            temperature: 0.9, max_tokens: 8192, stream: false,
                         }),
                     },
                     1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
@@ -1672,15 +1686,16 @@ const PetPvpApp: React.FC = () => {
                             <div className="text-[11px] font-bold text-slate-600 truncate">{c.charName}</div>
                         </div>
                     <div className="flex items-center justify-center py-1 px-2 min-h-[110px]">
-                        {/* ⑦ 受击差分：被命中的那一拍切换 hurt 差分图/颜文字；没配差分时回落常规形象
-                            （无任何形象的宠物给一个通用「受伤颜」——预设宠物天然有差分） */}
+                        {/* ⑦ 受击差分：配了 hurt 差分（池子模板自带/玩家上传）才在被命中那一拍切换；
+                            canvas：差分为空 = 无差分（受击仍显示常形象，靠边框变色表现受击），
+                            不再回落通用受伤颜——预设自带差分与玩家配的分开，互不混 */}
                         {(() => {
                             const img = isHurt ? (c.hurtImageRef || c.imageRef) : c.imageRef;
                             const rawFace = isHurt ? (c.hurtKaomoji || c.kaomoji) : c.kaomoji;
-                            const dot = isHurt ? (c.hurtKaomoji || (c.kaomoji || '').includes('\n') ? rawFace : (rawFace || '(=×ω×=)')) : c.kaomoji;
+                            const dot = isHurt ? (c.hurtKaomoji || c.kaomoji) : c.kaomoji;
                             if (img) return <TokenImg value={img} className="w-full h-32 object-cover rounded-lg" />;
                             if ((dot || '').includes('\n')) { const m = dotMeasure(dot!); return <pre className="font-mono whitespace-pre text-center text-slate-600" style={{ fontSize: dotFontPx(m.lines, m.cols, 150, 110), lineHeight: 1.15 }}>{dot}</pre>; }
-                            return <span className="text-[10px] font-mono whitespace-pre text-center leading-tight text-slate-600 break-all">{dot || (isHurt ? '(=×ω×=)' : '(=ↀωↀ=)')}</span>;
+                            return <span className="text-[10px] font-mono whitespace-pre text-center leading-tight text-slate-600 break-all">{dot || (isHurt ? rawFace || '(=ↀωↀ=)' : '(=ↀωↀ=)')}</span>;
                         })()}
                     </div>
                         <div className="px-2 pb-2 text-center">
@@ -2064,7 +2079,7 @@ const PetPvpApp: React.FC = () => {
                                 <PetVisual pet={pet} size="w-10 h-10" boxPx={40} />
                                 <div className="flex-1 min-w-0">
                                     <div className="text-sm font-black text-slate-800 truncate">{pet.name} 的受击差分</div>
-                                    <div className="text-[9px] text-slate-400">被命中的那一拍切换成的形象；不配就用通用受伤颜</div>
+                                    <div className="text-[9px] text-slate-400">被命中的那一拍切换成的形象；不配 = 无差分（受击仍显示常形象）</div>
                                 </div>
                             </div>
                             <div>
@@ -2077,7 +2092,7 @@ const PetPvpApp: React.FC = () => {
                                 </div>
                             </div>
                             <div>
-                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">受击颜文字 / 点阵（无图时用；空 = 通用受伤颜）</label>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">受击颜文字 / 点阵（无图时用；空 = 无差分）</label>
                                 <textarea value={hurtKaomojiDraft} onChange={e => setHurtKaomojiDraft(e.target.value)} rows={4}
                                     className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none" />
                             </div>
@@ -2178,7 +2193,7 @@ const PetPvpApp: React.FC = () => {
                                     {tplHurtImageRef && <TokenImg value={tplHurtImageRef} className="w-9 h-9 rounded-lg object-cover" />}
                                     {tplHurtImageRef && <button onClick={() => setTplHurtImageRef(undefined)} className="text-[#AFA3A1] hover:text-[#3a3a36] px-1 text-xs font-bold">×</button>}
                                 </div>
-                                <textarea value={tplHurtKaomoji} onChange={e => setTplHurtKaomoji(e.target.value)} placeholder="受伤颜文字 / 点阵（不传图时用；空 = 通用受伤颜）" rows={2}
+                                <textarea value={tplHurtKaomoji} onChange={e => setTplHurtKaomoji(e.target.value)} placeholder="受伤颜文字 / 点阵（不传图时用；空 = 无差分）" rows={2}
                                     className="w-full px-3 py-2 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-[10px] font-mono outline-none whitespace-pre" />
                             </div>
                             <button onClick={handleAddTemplate} className="w-full py-2.5 rounded-xl bg-[#DAD8C0] text-[#3a3a36] text-sm font-bold active:scale-[0.98]">加入池子</button>
