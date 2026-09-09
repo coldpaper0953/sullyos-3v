@@ -1601,44 +1601,59 @@ const PetPvpApp: React.FC = () => {
         announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: speakerCharId, charName: speakerName });
         (async () => {
             let reaction = '';
-            try {
-                const persona = await buildCharPrompt(speakerCharId, sessionRef.current?.lines);
-                const prompt = loserCharId !== 'user'
-                    ? (meta.promptPunish || PROMPT_PUNISH_DEFAULT)
-                        .split('{人设}').join(persona)
-                        .split('{惩罚}').join(picked.text)
-                        .split('{赢家}').join(charNameOf(winnerCharId))
-                    : (meta.promptPunishWinner || PROMPT_PUNISH_WINNER_DEFAULT)
-                        .split('{人设}').join(persona)
-                        .split('{惩罚}').join(picked.text)
-                        .split('{输家}').join(userProfile.name || 'User');
-                const cfg = pickModel(loserCharId !== 'user' ? 'punish' : 'punishWinner');
-                const data = await safeFetchJson(
-                    `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-                        body: JSON.stringify({
-                            model: cfg.model,
-                            messages: [
-                                { role: 'system', content: prompt },
-                                { role: 'user', content: loserCharId !== 'user' ? '认罚吧。' : '说两句吧。' },
-                            ],
-                            temperature: 0.9, max_tokens: 8192, stream: false,
-                        }),
-                    },
-                    1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
-                );
-                const d2 = await data;
-                // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
-                const rawPun = (extractContent(d2) || '').trim();
-                reaction = isCnLeak(rawPun) ? '' : rawPun.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
-            } catch { /* 回应失败不影响惩罚本身 */ }
+            const persona = await buildCharPrompt(speakerCharId, sessionRef.current?.lines).catch(() => '');
+            const prompt = loserCharId !== 'user'
+                ? (meta.promptPunish || PROMPT_PUNISH_DEFAULT)
+                    .split('{人设}').join(persona)
+                    .split('{惩罚}').join(picked.text)
+                    .split('{赢家}').join(charNameOf(winnerCharId))
+                : (meta.promptPunishWinner || PROMPT_PUNISH_WINNER_DEFAULT)
+                    .split('{人设}').join(persona)
+                    .split('{惩罚}').join(picked.text)
+                    .split('{输家}').join(userProfile.name || 'User');
+            const cfg = pickModel(loserCharId !== 'user' ? 'punish' : 'punishWinner');
+            // 上游过载/吊死退避重试（对齐群聊同款）：共 3 次尝试（间隔 10s/30s），全失败给人话提示不再静默
+            for (let attempt = 0; attempt < 3 && !reaction; attempt++) {
+                if (attempt > 0) await new Promise(rs => setTimeout(rs, attempt === 1 ? 10_000 : 30_000));
+                try {
+                    const data = await safeFetchJson(
+                        `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+                            body: JSON.stringify({
+                                model: cfg.model,
+                                messages: [
+                                    { role: 'system', content: prompt },
+                                    { role: 'user', content: loserCharId !== 'user' ? '认罚吧。' : '说两句吧。' },
+                                ],
+                                temperature: 0.9, max_tokens: 8192, stream: false,
+                            }),
+                        },
+                        1, 60_000, { appName: '宠物对战', purpose: '惩罚回应' },
+                    );
+                    const d2 = await data;
+                    // 思维链泄漏防线：中文占比 < 20% = 英文思维链截断（常混着角色中文名），丢弃
+                    const rawPun = (extractContent(d2) || '').trim();
+                    reaction = isCnLeak(rawPun) ? '' : rawPun.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
+                } catch { /* 本轮失败，退避后重试 */ }
+            }
+            if (!reaction) {
+                addToast(`惩罚回应生成失败（上游线路过载，已重试 3 次）——惩罚本身已生效，稍后可在私聊让 ${speakerName} 自己认罚`, 'error');
+            }
             if (reaction) {
-                await DB.saveMessage({ charId: speakerCharId, role: 'assistant', type: 'text', content: reaction });
+                // canvas：NPC 互打的惩罚回应——两人有共同群发群聊（走通讯录红点），无私聊才发私聊拉小窗；user 参战恒发私聊
+                const commonGroup = loserCharId !== 'user' && winnerCharId !== 'user'
+                    ? groups.find(g => g.members.includes(loserCharId) && g.members.includes(winnerCharId))
+                    : null;
+                await DB.saveMessage(commonGroup
+                    ? { charId: speakerCharId, groupId: commonGroup.id, role: 'assistant', type: 'text', content: reaction }
+                    : { charId: speakerCharId, role: 'assistant', type: 'text', content: reaction });
                 announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: speakerCharId, charName: speakerName });
-                // 落库即拉起小窗（MiniChatWindow 监听这个事件；点红点才是通讯录列表）
-                window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: speakerCharId } }));
+                // 落库即拉起小窗（MiniChatWindow 监听这个事件；点红点才是通讯录列表）；群消息不拉小窗
+                if (!commonGroup) {
+                    window.dispatchEvent(new CustomEvent('petpvp-minichat-open', { detail: { charId: speakerCharId } }));
+                }
             }
             announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: speakerCharId, charName: speakerName });
         })();
