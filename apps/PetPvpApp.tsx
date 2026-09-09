@@ -161,7 +161,9 @@ const PROMPT_BATTLE_DEFAULT = `{A人设}
 
 请按以下格式输出（共 2~4 段，不要输出其他内容）：
 第一段：{败者主人}（{败者角色}）对战败发表一两句评价；
-之后：{胜者主人}（{胜者角色}）回复两三句。`;
+之后：{胜者主人}（{胜者角色}）回复两三句。
+
+【重要】{A主人} 或 {B主人} 里如果有一方是用户本人（User），那一方的话一句都不要写、不要替 TA 发言——只写非用户角色的发言，对用户只能以第二人称「你」提及。`;
 
 type Tab = 'gacha' | 'pets' | 'battle' | 'stats';
 
@@ -1188,7 +1190,9 @@ const PetPvpApp: React.FC = () => {
                 // canvas：战后感言不留在战斗页——NPC 的发言分别发到各自私聊；user 自己那句不代替发送
                 const npcLines: { charId: string; text: string }[] = [];
                 try {
-                    for (const speaker of [loser, winner]) {
+                    // canvas：不代替 user 发言——轮调只让 NPC（败者/胜者）各自说话，
+                    // user 是败者或胜者时跳过，不替 TA 生成任何回复
+                    for (const speaker of [loser, winner].filter(s => s.charId !== 'user')) {
                         const persona = await buildCharPrompt(speaker.charId, sessionRef.current?.lines);
                         const isLoser = speaker === loser;
                         const prompt = (meta.promptBattle || PROMPT_BATTLE_DEFAULT)
@@ -1206,9 +1210,7 @@ const PetPvpApp: React.FC = () => {
                             .split('{胜者主人}').join(charNameOf(winner.charId))
                             .split('{败者角色}').join(loser.charName)
                             .split('{胜者角色}').join(winner.charName)
-                            + (speaker.charId === 'user'
-                                ? `\n\n你现在要发言了（你是${isLoser ? '败者' : '胜者'}本人），请用你自己的口吻说一两句话（40 字以内），直接输出，不要输出其他内容。`
-                                : `\n\n你现在要发言了（你是${isLoser ? '败者' : '胜者'}${speaker.charName}），请用你自己的口吻说一两句话（40 字以内），直接输出，不要输出其他内容。`);
+                            + `\n\n你现在要发言了（你是${isLoser ? '败者' : '胜者'}${speaker.charName}），请用你自己的口吻说一两句话（40 字以内），只说你自己的话，不要替 ${userProfile.name || 'User'} 发言，直接输出，不要输出其他内容。`;
                         const cfg = pickModel('battle');
                         let text = '';
                         // 思维链泄漏防线：content 空被 extractContent 回落成英文思维链时重试一次（中文占比判定）
@@ -1234,8 +1236,8 @@ const PetPvpApp: React.FC = () => {
                             if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '').slice(0, 200);
                         }
                         if (text) {
-                            lines.push(`${speaker.charId === 'user' ? (userProfile.name || '我') : speaker.charName}：${text}`);
-                            if (speaker.charId !== 'user') npcLines.push({ charId: speaker.charId, text });
+                            lines.push(`${speaker.charName}：${text}`);
+                            npcLines.push({ charId: speaker.charId, text });
                         }
                     }
                 } catch { /* 失败 → 脚本战报兜底 */ }
@@ -1312,6 +1314,9 @@ const PetPvpApp: React.FC = () => {
                     const rawCn = (extractContent(d2) || '').trim();
                     if (!isCnLeak(rawCn)) text = rawCn.replace(/<[^>]*>|<\/[^>]*>/g, '');
                 }
+                // canvas：不代替 user 发言——提示词已禁止，AI 不听话时把以用户名开头的行删掉兜底
+                const userName = userProfile.name || 'User';
+                text = text.split('\n').filter(line => !line.trim().startsWith(userName) && !/^\s*(User|用户)\s*[（(:：]/.test(line)).join('\n').trim();
                 if (text) {
                     record.narration = text;
                     record.promptSent = prompt;
