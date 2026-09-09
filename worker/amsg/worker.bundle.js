@@ -10715,6 +10715,7 @@ async function runRecall(args, ctx) {
     return { ok: false, reason: "no_logs", yearMonth: targetMonth };
   }
   const logs = char.memories.filter((mem) => {
+    if (!mem || typeof mem !== "object" || typeof mem.date !== "string") return false;
     return mem.date.includes(targetMonth) || mem.date.includes(`${args.year}\u5E74${parseInt(args.month)}\u6708`);
   });
   if (logs.length === 0) {

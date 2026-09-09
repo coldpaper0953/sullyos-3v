@@ -133,3 +133,20 @@ deploy/termux/ 下 9 个文件：
   vitest         361 个文件 / 4516 个测试全过
   前端构建        vite build 成功
   后端构建        tsc 零错误
+
+
+六、抽卡动画上传 + rvr 随机池 + 群聊崩溃修复（2026-09-09）
+----------------------------------------
+
+* 抽卡动画：设置弹窗里除了贴 URL，还能直接上传本地图片/GIF
+  （走 blobref 入库，与宠物差分图同一套流程）
+* 随机vs随机：随机池不再混入 user——rvr 就是双方 NPC 的表演赛，
+  想亲自下场用 A vs B / A vs 随机 选自己
+* 修复群聊「Cannot read properties of undefined (reading 'replace')」：
+  旧版对战写记忆时给老存档追加过裸字符串（没有 date 字段），
+  群聊给成员构建 prompt 时读 m.date.replace 直接崩，整轮生成失败。
+  双向修：写入侧（PetPvpApp 的 pushMemLine 把旧条目逐行包成规范
+  记忆对象再追加，顺带清洗已混入的裸字符串）+ 读取侧兜底
+  （context.ts / agenticTools.ts 的记忆过滤遇缺 date 条目按非本月
+  跳过；amsg worker 两份 bundle 同步）
+

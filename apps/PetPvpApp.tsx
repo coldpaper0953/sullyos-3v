@@ -279,13 +279,22 @@ const petMemFrag = (line: string) => {
         mood: 'rec' as const,
     };
 };
-// 就地追加一句到 char.memories（老存档是纯字符串的保留字符串追加，避免混型）。
+// 就地把混进 memories 的坏条目包成规范 MemoryFragment：
+// 老存档的纯字符串 memories、旧版对战直接追加的裸字符串行都没有 date 字段，
+// 聊天侧 buildCoreContext 读 m.date.replace 会抛「Cannot read properties of
+// undefined (reading 'replace')」，群聊/私聊整轮 prompt 构建直接失败。
+const coercePetMem = (m: any): any => {
+    if (m && typeof m === 'object' && typeof m.date === 'string') return m;
+    const text = typeof m === 'string' ? m.trim() : (m && typeof m === 'object' && typeof m.summary === 'string' ? m.summary.trim() : '');
+    return text ? petMemFrag(text) : null;
+};
+// 追加一句记忆到 char.memories（老存档是纯字符串的也逐行包成对象，杜绝裸字符串进数组）。
 // 同时把当月写进 activeMemoryMonths：主聊天的详细记忆段按激活月份过滤，
 // 不激活的话对战记忆永远进不了 system prompt——表现为「打完游戏别处问就不记得」。
 const pushMemLine = (char: any, line: string) => {
     const raw = char.memories;
-    if (Array.isArray(raw)) char.memories = [...raw.slice(-29), petMemFrag(line)];
-    else char.memories = [...String(raw || '').split('\n').slice(-29), line];
+    if (Array.isArray(raw)) char.memories = [...raw.map(coercePetMem).filter(Boolean).slice(-29), petMemFrag(line)];
+    else char.memories = [...String(raw || '').split('\n').map(coercePetMem).filter(Boolean).slice(-29), petMemFrag(line)];
     const now = new Date();
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const cur = Array.isArray(char.activeMemoryMonths) ? char.activeMemoryMonths : [];
@@ -385,6 +394,8 @@ const PetPvpApp: React.FC = () => {
     const [hurtKaomojiDraft, setHurtKaomojiDraft] = useState('');
     const [hurtImageDraft, setHurtImageDraft] = useState<string | undefined>();
     const hurtFileRef = useRef<HTMLInputElement>(null);
+    // 抽卡动画本地上传（设置弹窗图片模式）：与差分图同一套 processImage+migrateDataUrlToRef 入库
+    const drawAnimFileRef = useRef<HTMLInputElement>(null);
 
     const charNameOf = (id: string) => id === 'user' ? (userProfile.name || '我') : (characters.find(c => c.id === id)?.name || '未知');
     const charAvatarOf = (id: string) => id === 'user' ? userProfile.avatar : characters.find(c => c.id === id)?.avatar;
@@ -782,7 +793,9 @@ const PetPvpApp: React.FC = () => {
         return buildCombatant(pet, charId, charNameOf(charId), meta.totalStatPoints);
     };
     const pickRandomCharWithPet = (exclude?: string) => {
-        const pool = alivePets.map(p => p.ownerId).filter(id => id !== exclude);
+        // 随机 vs 随机 = 双方都是 NPC（canvas 口径）：user 不进随机池，
+        // 想亲自下场用 A vs B / A vs 随机 选自己
+        const pool = alivePets.map(p => p.ownerId).filter(id => id !== exclude && id !== 'user');
         return pool.length ? pool[Math.floor(Math.random() * pool.length)] : '';
     };
     const resolveSides = (): [PetCombatant, PetCombatant] | null => {
@@ -1805,10 +1818,11 @@ const PetPvpApp: React.FC = () => {
             {animScene && (
                 <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-6" onClick={() => { setAnimScene(null); setResultModal(cur => cur ?? { pet: animScene.pet }); }}>
                     <div className="bg-white rounded-2xl w-full max-w-sm p-5 relative animate-fade-in" onClick={e => e.stopPropagation()}>
-                        {/* 动画区：图片模式（URL，支持 GIF）或盲文多帧轮换（默认三帧数码猫/自定义空行分隔多帧）——纯白底，和结果卡一个色 */}
+                        {/* 动画区：图片模式（URL 或本地上传，支持 GIF）或盲文多帧轮换（默认三帧数码猫/自定义空行分隔多帧）——纯白底，和结果卡一个色 */}
                         <div className="rounded-xl bg-white border border-[#AFA3A1]/40 flex items-center justify-center h-56 overflow-hidden">
                             {meta.drawAnimMode === 'image' && meta.drawAnimUrl
-                                ? <img src={meta.drawAnimUrl} className="max-h-full max-w-full object-contain" />
+                                // TokenImg 兼容 blobref（本地上传）/ data: / http(s) URL 三种来源
+                                ? <TokenImg value={meta.drawAnimUrl} className="max-h-full max-w-full object-contain" />
                                 : (() => { const frames = parseAnimFrames(meta.drawAnimBraille); const m = dotMeasure(frames[0]); return <pre className="font-mono whitespace-pre text-center text-slate-600" style={{ fontSize: dotFontPx(m.lines, m.cols, 320, 210), lineHeight: 1.15, animation: 'petBob 900ms ease-in-out infinite alternate' }}>{frames[digFrame % frames.length]}</pre>; })()}
                         </div>
                         <div className="text-center text-[11px] text-slate-500 tracking-[0.3em] mt-3 animate-pulse">翻 找 中 …</div>
@@ -2260,9 +2274,23 @@ const PetPvpApp: React.FC = () => {
                                             className={`flex-1 py-1.5 rounded text-[10px] font-bold ${meta.drawAnimMode === id ? 'bg-white shadow text-slate-700' : 'text-slate-400'}`}>{label}</button>
                                     ))}
                                 </div>
-                                {meta.drawAnimMode === 'image' && (
-                                    <input value={meta.drawAnimUrl || ''} onChange={async e => { const next = { ...meta, drawAnimUrl: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }} placeholder="图片 URL（支持 GIF）" className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none" />
-                                )}
+                                {meta.drawAnimMode === 'image' && (() => (
+                                    <div className="space-y-2">
+                                        <input value={meta.drawAnimUrl || ''} onChange={async e => { const next = { ...meta, drawAnimUrl: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }} placeholder="图片 URL（支持 GIF）；或点下方按钮上传本地图片" className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none" />
+                                        {/* 本地上传：与宠物差分图同一套入库流程（缩宽+migrateDataUrlToRef），存成 blobref 写进 drawAnimUrl */}
+                                        <div className="flex gap-2 items-center">
+                                            <input ref={drawAnimFileRef} type="file" accept="image/*" className="hidden"
+                                                onChange={async e => { const f = e.target.files?.[0]; if (!f) return; try { const base64 = await processImage(f, { maxWidth: 400, quality: 0.8 }); const ref = await migrateDataUrlToRef(base64); const next = { ...meta, drawAnimUrl: ref }; setMeta(next); await DB.savePetMeta(next); addToast('抽卡动画图片已上传', 'success'); } catch { addToast('图片处理失败', 'error'); } e.target.value = ''; }} />
+                                            <button onClick={() => drawAnimFileRef.current?.click()} className="flex-1 py-2 rounded-xl bg-[#E9E8DB] text-slate-600 text-xs font-bold active:scale-[0.98]">
+                                                {/^(blobref:|data:)/.test(meta.drawAnimUrl || '') ? '换一张（当前为本地上传）' : '上传本地图片（GIF/静态图）'}
+                                            </button>
+                                            {/^(blobref:|data:)/.test(meta.drawAnimUrl || '') && (
+                                                <button onClick={async () => { const next = { ...meta, drawAnimUrl: undefined }; setMeta(next); await DB.savePetMeta(next); }} className="px-3 py-2 rounded-xl bg-slate-200 text-slate-500 text-xs font-bold">清除</button>
+                                            )}
+                                        </div>
+                                        {meta.drawAnimUrl && <TokenImg value={meta.drawAnimUrl} className="w-full h-20 object-contain rounded-lg bg-white border border-[#AFA3A1]/30" />}
+                                    </div>
+                                ))()}
                                 {meta.drawAnimMode === 'braille' && (() => {
                                     const boxes = frameBoxes ?? (meta.drawAnimBraille && meta.drawAnimBraille.trim() ? meta.drawAnimBraille.replace(/\r/g, '').split(/\n\s*\n/) : ['']);
                                     const validFrames = parseAnimFrames(meta.drawAnimBraille);

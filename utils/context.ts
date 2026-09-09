@@ -69,6 +69,8 @@ export const ContextBuilder = {
             const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
             if (char.memories && char.memories.length > 0) {
                 const currentMonthLogs = char.memories.filter(m => {
+                    // 兜底同 5b：裸字符串/缺 date 的条目按非本月跳过，不再读 undefined.replace
+                    if (!m || typeof m !== 'object' || typeof m.date !== 'string') return false;
                     let normDate = m.date.replace(/[\/年月]/g, '-').replace('日', '');
                     const parts = normDate.split('-');
                     if (parts.length >= 2) {
@@ -239,8 +241,11 @@ export const ContextBuilder = {
                 const logs = char.memories.filter(m => {
                     // 1. Replace separators / or 年 or 月 with -
                     // 2. Remove '日'
-                    // 3. Ensure single digit months/days are padded (e.g. 2024-1-1 -> 2024-01-01) for strict matching, 
+                    // 3. Ensure single digit months/days are padded (e.g. 2024-1-1 -> 2024-01-01) for strict matching,
                     //    but simplest is to just check startsWith after rough normalization.
+                    // 兜底：老存档/旧版对战写入的裸字符串条目没有 date 字段，读 undefined.replace
+                    // 会抛错炸掉整个 prompt 构建（群聊/私聊整轮失败），这里按非本月处理跳过。
+                    if (!m || typeof m !== 'object' || typeof m.date !== 'string') return false;
                     let normDate = m.date.replace(/[\/年月]/g, '-').replace('日', '');
                     
                     // Basic fix for "2024-1-1" vs "2024-01" matching issues

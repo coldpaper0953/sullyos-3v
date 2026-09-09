@@ -183,6 +183,8 @@ export async function runRecall(
         return { ok: false, reason: 'no_logs', yearMonth: targetMonth };
     }
     const logs = char.memories.filter(mem => {
+        // 兜底：老存档/旧版对战写入的裸字符串条目没有 date 字段，直接跳过（否则 mem.date.includes 崩）
+        if (!mem || typeof mem !== 'object' || typeof mem.date !== 'string') return false;
         return mem.date.includes(targetMonth) || mem.date.includes(`${args.year}年${parseInt(args.month)}月`);
     });
     if (logs.length === 0) {
