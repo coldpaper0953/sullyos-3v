@@ -72,3 +72,4 @@ deploy/termux/run/
 # TIAO-Capacitor local Android toolchain and caches (D: only, never committed)
 .android-sdk/
 .gradle-user-home/
+"worker/amsg/worker.bundle.js"  
