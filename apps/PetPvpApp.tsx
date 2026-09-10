@@ -404,7 +404,7 @@ const PetPvpApp: React.FC = () => {
     const bgmAudioRef = useRef<HTMLAudioElement>(null);
     const [bgmPaused, setBgmPaused] = useState(false);
     const [bgmManual, setBgmManual] = useState(false);
-    // battleBgmUrl 兼容三种来源：blobref（本地上传）/ data: / http(s) URL
+    // battleBgmUrl 兼容三种来源：blobref（撤销上传前存进库的旧数据）/ data: / http(s) URL
     const bgmSrc = useBlobRefUrl(meta.battleBgmUrl);
     const bgmShouldPlay = (!!arena && !!bgmSrc && !bgmPaused && !(musicCurrent && musicPlaying))
         || (!!bgmSrc && !bgmPaused && bgmManual);
@@ -1856,7 +1856,7 @@ const PetPvpApp: React.FC = () => {
 
     return (
         <div className="h-full w-full flex flex-col bg-[#F9FBF5] font-sans relative overflow-hidden">
-            {/* 战斗 BGM：战斗页打开自动播放（音乐卡片在放时让位），顶栏可关/重播；关战斗页即停；src 兼容 blobref（本地上传）/URL */}
+            {/* 战斗 BGM：战斗页打开自动播放（音乐卡片在放时让位），顶栏可关/重播；关战斗页即停；src 兼容 blobref（旧数据）/URL */}
             {meta.battleBgmUrl && <audio ref={bgmAudioRef} src={bgmSrc} loop hidden />}
             {/* 抽卡动画弹窗：点抽签立即出现（不等 API），点背景可跳过 → 结果卡另开一张 */}
             {animScene && (
