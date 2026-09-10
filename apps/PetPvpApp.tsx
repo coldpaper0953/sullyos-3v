@@ -8,7 +8,7 @@ import {
     rollGrade, rollStats, rollAtk, rollHpByGrade, rollPool,
     buildCombatant, simulateBattle, estimateOdds, simulateContinue, PetCombatant, BattleEvent,
 } from '../utils/petEngine';
-import { migrateDataUrlToRef } from '../utils/blobRef';
+import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
 import { processImage } from '../utils/file';
 import { useMusic } from '../context/MusicContext';
 import { ContextBuilder } from '../utils/context';
@@ -404,8 +404,10 @@ const PetPvpApp: React.FC = () => {
     const bgmAudioRef = useRef<HTMLAudioElement>(null);
     const [bgmPaused, setBgmPaused] = useState(false);
     const [bgmManual, setBgmManual] = useState(false);
-    const bgmShouldPlay = (!!arena && !!meta.battleBgmUrl && !bgmPaused && !(musicCurrent && musicPlaying))
-        || (!!meta.battleBgmUrl && !bgmPaused && bgmManual);
+    // battleBgmUrl 兼容三种来源：blobref（本地上传）/ data: / http(s) URL
+    const bgmSrc = useBlobRefUrl(meta.battleBgmUrl);
+    const bgmShouldPlay = (!!arena && !!bgmSrc && !bgmPaused && !(musicCurrent && musicPlaying))
+        || (!!bgmSrc && !bgmPaused && bgmManual);
     useEffect(() => {
         const el = bgmAudioRef.current;
         if (!el) return;
@@ -414,7 +416,7 @@ const PetPvpApp: React.FC = () => {
     }, [bgmShouldPlay]);
     const bgmReplay = () => {
         const el = bgmAudioRef.current;
-        if (!el || !meta.battleBgmUrl) return;
+        if (!el || !bgmSrc) return;
         setBgmPaused(false);
         setBgmManual(true);
         el.currentTime = 0;
@@ -1854,8 +1856,8 @@ const PetPvpApp: React.FC = () => {
 
     return (
         <div className="h-full w-full flex flex-col bg-[#F9FBF5] font-sans relative overflow-hidden">
-            {/* 战斗 BGM：战斗页打开自动播放（音乐卡片在放时让位），顶栏可关/重播；关战斗页即停 */}
-            {meta.battleBgmUrl && <audio ref={bgmAudioRef} src={meta.battleBgmUrl} loop hidden />}
+            {/* 战斗 BGM：战斗页打开自动播放（音乐卡片在放时让位），顶栏可关/重播；关战斗页即停；src 兼容 blobref（本地上传）/URL */}
+            {meta.battleBgmUrl && <audio ref={bgmAudioRef} src={bgmSrc} loop hidden />}
             {/* 抽卡动画弹窗：点抽签立即出现（不等 API），点背景可跳过 → 结果卡另开一张 */}
             {animScene && (
                 <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-6" onClick={() => { setAnimScene(null); setResultModal(cur => cur ?? { pet: animScene.pet }); }}>
@@ -2379,7 +2381,7 @@ const PetPvpApp: React.FC = () => {
                                 <input value={meta.battleBgmUrl || ''} onChange={async e => { const next = { ...meta, battleBgmUrl: e.target.value.trim() || undefined }; setMeta(next); await DB.savePetMeta(next); }}
                                     placeholder="歌曲 URL（mp3 直链等；留空 = 不放）"
                                     className="w-full px-3 py-2.5 bg-[#F9FBF5] border border-[#AFA3A1]/40 rounded-xl text-sm outline-none" />
-                                <p className="text-[9px] text-slate-400 mt-1 leading-tight">点开战斗界面自动循环播放（音量 45%）；音乐卡片正在放歌时自动让位；顶栏金币旁可关闭/重播；关掉战斗页即停。</p>
+                                <p className="text-[9px] text-slate-400 mt-1 leading-tight">点开战斗界面自动循环播放（音量 45%）；音乐卡片正在放歌时自动让位；顶栏金币旁可关闭/重播；关掉战斗页即停。清空输入框 = 移除。</p>
                             </div>
                             {/* ⑧ API 设置：每个调用点各自选预设，不设 = 主聊天 API；一键设为相同=用户主动点 */}
                             <div className="pt-2 border-t border-slate-100">
