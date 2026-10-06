@@ -150,6 +150,48 @@ export const IconRefresh: React.FC<IconProps> = (p) => (
   </Svg>
 );
 
+export const IconMail: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <rect x="3.5" y="5.5" width="17" height="13" rx="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M4 7l8 6 8-6" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export const IconImage: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="9" cy="9.5" r="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M4.5 17.5l4.5-4.5 3 3 3.5-3.5 4 4" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export const IconScale: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <path d="M9 9V3m0 0L6 6m3-3l3 3M15 15v6m0 0l-3-3m3 3l3-3M4 21h7M13 3h7" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export const IconGauge: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <path d="M4.5 19a8.5 8.5 0 1 1 15 0" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12 13.5l3-3" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="12" cy="13.5" r="1.4" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export const IconRuler: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <path d="M8 4v16M8 4l-3 3 3 3M8 4l3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M11 7h2M11 11h2M11 15h2M11 19h2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export const IconArrowsUpDown: React.FC<IconProps> = (p) => (
+  <Svg {...p}>
+    <path d="M7 4v16M7 4L4 7m3-3l3 3M17 20V4m0 16l-3-3m3 3l3-3" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
 /* ── 根据心情名取表情图标 ── */
 export const moodIcon = (m: string): React.FC<IconProps> => {
   switch (m) {

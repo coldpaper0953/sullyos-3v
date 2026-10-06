@@ -1,7 +1,7 @@
 // 桌宠融合版「检查更新」：拉 wwww 仓库的 Release，剥前缀比版本号取最高。
 // 从嗡嗡嗡 Android 版 checkUpdate 移植（GitHub Release 不保证按版本号排序，必须遍历取最高）。
 
-export const PET_VERSION = '3.1.1'; // 当前融合版版本号（发版时同步改）
+export const PET_VERSION = '3.1.2'; // 当前融合版版本号（发版时同步改）
 
 const REPO = 'coldpaper0953/wwwww';
 const TAG_PREFIX = 'sullyos-v';

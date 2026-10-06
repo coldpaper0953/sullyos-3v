@@ -8,15 +8,17 @@ import {
 import {
   onBubble, onPrank, onStateChange, showBubble,
   getAff, awardAff, milestoneCrossed, titleFor,
-  isMode, getSkin, getChatLog, chatGapMin, chatJitter, chatDailyCap,
+  isMode, getSkinFrames, getChatLog, chatGapMin, chatJitter, chatDailyCap,
   focusTick, finishFocus, getInt, putInt, todayStr,
+  getPetSize, getSpeedMul, getJumpPct, getStandLift, getGlideLevel, glideFriction,
+  type PetAction,
 } from '../utils/petStore';
 import { quotesPick, quotesPickFmt } from '../utils/petQuotes';
 import { aiChat, type PetAIConfig } from '../utils/petAI';
 import { randomEvent, checkAchievements } from '../utils/petExtras';
 import PrankOverlay from './PrankOverlay';
 
-type Action = 'mosquito' | 'happy' | 'sad' | 'work' | 'jump' | 'dead';
+type Action = PetAction;
 
 const FRAME_COUNT: Record<Action, number> = { mosquito: 5, happy: 5, sad: 5, work: 5, jump: 5, dead: 1 };
 
@@ -40,8 +42,6 @@ const resolveDefaultAction = (s: EmotionState): Action => {
 const BASE = (import.meta.env.BASE_URL || '/') + 'pet/';
 const frameUrl = (a: Action, i: number) => `${BASE}${a}_${i + 1}.png`;
 
-const PET_SIZE = 72;
-const JUMP_HEIGHT = 64;
 const POS_KEY = 'petdesk-pet-pos';
 
 const loadPos = (): { x: number; y: number } => {
@@ -52,7 +52,8 @@ const loadPos = (): { x: number; y: number } => {
       if (typeof p?.x === 'number' && typeof p?.y === 'number') return p;
     }
   } catch { /* ignore */ }
-  return { x: window.innerWidth - PET_SIZE - 16, y: window.innerHeight * 0.4 };
+  const sz = getPetSize();
+  return { x: window.innerWidth - sz - 16, y: window.innerHeight * 0.4 };
 };
 
 function dayCount(): number {
@@ -63,6 +64,11 @@ function dayCount(): number {
 }
 
 interface BubbleState { text: string; until: number; prio: number; }
+
+// 抛掷/惯性物理常量（对齐原生 30ms 物理帧）
+const FALL_GRAVITY = 1.2;     // px / 30ms
+const FALL_DRAG = 0.99;       // 空气阻力
+const FALL_V_SCALE = 30 / 16; // 松手速度放大系数
 
 const FloatingPet: React.FC = () => {
   const { openApp, apiConfig, activeApp } = useOS();
@@ -82,6 +88,22 @@ const FloatingPet: React.FC = () => {
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const lastFrameAt = useRef(Date.now());
   const bubbleRef = useRef<BubbleState | null>(null);
+
+  // 动态参数缓存（设置页改动时通过 onStateChange 同步）
+  const sizeRef = useRef(getPetSize());
+  const speedMulRef = useRef(getSpeedMul());
+  const jumpPctRef = useRef(getJumpPct());
+  const standLiftRef = useRef(getStandLift());
+  const glideLevelRef = useRef(getGlideLevel());
+
+  // 抛掷 / 惯性物理状态
+  const fallRef = useRef<{ vx: number; vy: number; bounces: number } | null>(null);
+  const glideRef = useRef<{ vx: number; vy: number } | null>(null);
+  const physAtRef = useRef(Date.now());
+
+  // 拖动速度采样
+  const dragVelRef = useRef({ vx: 0, vy: 0 });
+  const lastMoveRef = useRef({ x: 0, y: 0, at: Date.now() });
 
   // 交互状态
   const downRef = useRef<{ x: number; y: number; at: number } | null>(null);
@@ -106,15 +128,17 @@ const FloatingPet: React.FC = () => {
     setBubble({ text, until: Date.now() + ms, prio });
   };
 
-  // 主循环：移动 + 帧动画 + 气泡过期
+  // 主循环：移动 + 帧动画 + 气泡过期 + 抛掷/惯性物理
   useEffect(() => {
     let raf = 0;
     const tick = () => {
       const now = Date.now();
       const p = posRef.current;
       const v = velRef.current;
-      const W = window.innerWidth - PET_SIZE;
-      const H = window.innerHeight - PET_SIZE;
+      const SZ = sizeRef.current;
+      const W = window.innerWidth - SZ;
+      const H = window.innerHeight - SZ;
+      const baseY = window.innerHeight - SZ - 12 - (standLiftRef.current / 100) * window.innerHeight;
 
       if (!draggingRef.current) {
         const dead = now < deadUntilRef.current;
@@ -125,6 +149,7 @@ const FloatingPet: React.FC = () => {
           const j = jumpingRef.current;
           const dt = (now - j.start) / 1000;
           const total = 0.6;
+          const amp = (jumpPctRef.current / 100) * window.innerHeight;
           if (dt >= total) {
             p.y = j.baseY;
             jumpingRef.current = null;
@@ -133,19 +158,86 @@ const FloatingPet: React.FC = () => {
             setAction(act);
           } else {
             const k = Math.sin((dt / total) * Math.PI);
-            p.y = j.baseY - k * JUMP_HEIGHT;
+            p.y = j.baseY - k * amp;
+          }
+        } else if (fallRef.current) {
+          // 抛物线扔出：竖直受重力加速，撞墙衰减反弹，落到地板摔停
+          if (now - physAtRef.current >= 30) {
+            physAtRef.current = now;
+            const f = fallRef.current;
+            f.vy += FALL_GRAVITY;
+            p.x += f.vx;
+            p.y += f.vy;
+            f.vx *= FALL_DRAG;
+            if (p.x < 0) { p.x = 0; f.vx = Math.abs(f.vx) * 0.55; }
+            else if (p.x > W) { p.x = W; f.vx = -Math.abs(f.vx) * 0.55; }
+            if (p.y < 40) { p.y = 40; f.vy = Math.abs(f.vy) * 0.5; }
+            const floor = window.innerHeight - SZ - 60;
+            if (p.y >= floor) {
+              p.y = floor;
+              if (f.vy > 10 && f.bounces < 2) {
+                f.vy = -f.vy * 0.42;
+                f.vx *= 0.7;
+                f.bounces++;
+              } else {
+                fallRef.current = null;
+                deadUntilRef.current = now + 700;   // 摔晕一小会儿
+                actionRef.current = 'dead';
+                setAction('dead');
+                setFrame(0);
+                showBubbleLocal(quotesPick('throw'), 2000, 2);
+                window.setTimeout(() => {
+                  if (deadUntilRef.current && Date.now() >= deadUntilRef.current - 100) {
+                    deadUntilRef.current = 0;
+                    const act = resolveDefaultAction(loadEmotion());
+                    actionRef.current = act;
+                    setAction(act);
+                  }
+                }, 700);
+              }
+            }
+          }
+        } else if (glideRef.current) {
+          // 惯性滑行：按档位摩擦力衰减，撞边反弹，慢到停就恢复巡航
+          if (now - physAtRef.current >= 30) {
+            physAtRef.current = now;
+            const g = glideRef.current;
+            const fr = glideFriction(glideLevelRef.current);
+            g.vx *= fr;
+            g.vy *= fr;
+            p.x += g.vx;
+            p.y += g.vy;
+            if (p.x < 0) { p.x = 0; g.vx = Math.abs(g.vx); }
+            if (p.x > W) { p.x = W; g.vx = -Math.abs(g.vx); }
+            if (p.y < 40) { p.y = 40; g.vy = Math.abs(g.vy); }
+            if (p.y > H) { p.y = H; g.vy = -Math.abs(g.vy); }
+            if (Math.hypot(g.vx, g.vy) < 0.15) {
+              glideRef.current = null;
+              const act = resolveDefaultAction(loadEmotion());
+              actionRef.current = act;
+              setAction(act);
+            }
           }
         } else if (isMode('jump')) {
-          // jump 模式：站原地（位置由用户拖）
           actionRef.current = 'jump';
           setAction('jump');
+          const d = baseY - p.y;
+          if (Math.abs(d) > 1.5) p.y += d * 0.08;
+          else p.y = baseY;
+        } else if (isMode('dnd')) {
+          actionRef.current = 'mosquito';
+          setAction('mosquito');
+          const d = baseY - p.y;
+          if (Math.abs(d) > 1.5) p.y += d * 0.08;
+          else p.y = baseY;
         } else if (isMode('work')) {
           actionRef.current = 'work';
           setAction('work');
         } else {
-          // 巡航
-          p.x += v.vx;
-          p.y += v.vy;
+          // 巡航（速度 × 飞行速度倍率）
+          const sm = speedMulRef.current;
+          p.x += v.vx * sm;
+          p.y += v.vy * sm;
           if (p.x < 0) { p.x = 0; v.vx = Math.abs(v.vx); }
           if (p.x > W) { p.x = W; v.vx = -Math.abs(v.vx); }
           if (p.y < 40) { p.y = 40; v.vy = Math.abs(v.vy); }
@@ -161,9 +253,11 @@ const FloatingPet: React.FC = () => {
 
       setPos({ x: p.x, y: p.y });
 
+      // 帧动画：按「自定义帧数 or 内置帧数」取模播放
       if (now - lastFrameAt.current >= 100) {
         lastFrameAt.current = now;
-        const fc = FRAME_COUNT[actionRef.current];
+        const fr = getSkinFrames(actionRef.current);
+        const fc = fr.length || FRAME_COUNT[actionRef.current];
         setFrame(f => (f + 1) % fc);
       }
 
@@ -203,11 +297,17 @@ const FloatingPet: React.FC = () => {
     return () => window.clearInterval(id);
   }, []);
 
-  // 订阅全局气泡 / 整蛊 / 状态变化
+  // 订阅全局气泡 / 整蛊 / 状态变化（状态变化时同步动态参数）
   useEffect(() => {
     const offBubble = onBubble((text, ms, prio) => showBubbleLocal(text, ms, prio));
     const offPrank = onPrank((count) => setPrank(count));
-    const offState = onStateChange(() => { /* 好感/模式变化，UI 已各自刷新 */ });
+    const offState = onStateChange(() => {
+      sizeRef.current = getPetSize();
+      speedMulRef.current = getSpeedMul();
+      jumpPctRef.current = getJumpPct();
+      standLiftRef.current = getStandLift();
+      glideLevelRef.current = getGlideLevel();
+    });
     return () => { offBubble(); offPrank(); offState(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -321,9 +421,15 @@ const FloatingPet: React.FC = () => {
 
   const onPointerDown = (e: React.PointerEvent) => {
     downRef.current = { x: e.clientX, y: e.clientY, at: Date.now() };
+    lastMoveRef.current = { x: e.clientX, y: e.clientY, at: Date.now() };
+    dragVelRef.current = { vx: 0, vy: 0 };
     movedRef.current = false;
     draggingRef.current = true;
     dragOffsetRef.current = { x: e.clientX - posRef.current.x, y: e.clientY - posRef.current.y };
+    // 中断进行中的抛掷/惯性/跳跃
+    fallRef.current = null;
+    glideRef.current = null;
+    jumpingRef.current = null;
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     // 长按 800ms = 摸头
     if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
@@ -337,38 +443,70 @@ const FloatingPet: React.FC = () => {
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (!draggingRef.current) return;
+    const now = Date.now();
+    const last = lastMoveRef.current;
+    const dt = now - last.at;
+    if (dt > 0) {
+      dragVelRef.current.vx = (e.clientX - last.x) / dt;   // px/ms
+      dragVelRef.current.vy = (e.clientY - last.y) / dt;
+    }
+    lastMoveRef.current = { x: e.clientX, y: e.clientY, at: now };
     const dx = e.clientX - (downRef.current?.x ?? e.clientX);
     const dy = e.clientY - (downRef.current?.y ?? e.clientY);
     if (Math.abs(dx) > 4 || Math.abs(dy) > 4) movedRef.current = true;
     if (movedRef.current) {
       if (pressTimerRef.current) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
-      const x = Math.max(0, Math.min(window.innerWidth - PET_SIZE, e.clientX - dragOffsetRef.current.x));
-      const y = Math.max(0, Math.min(window.innerHeight - PET_SIZE, e.clientY - dragOffsetRef.current.y));
+      const x = Math.max(0, Math.min(window.innerWidth - sizeRef.current, e.clientX - dragOffsetRef.current.x));
+      const y = Math.max(0, Math.min(window.innerHeight - sizeRef.current, e.clientY - dragOffsetRef.current.y));
       posRef.current = { x, y };
       setPos({ x, y });
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     draggingRef.current = false;
     if (pressTimerRef.current) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
     try { localStorage.setItem(POS_KEY, JSON.stringify(posRef.current)); } catch { /* ignore */ }
-    if (!movedRef.current) {
-      // 点击：计数
-      tapCountRef.current += 1;
-      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-      tapTimerRef.current = window.setTimeout(() => {
-        const n = tapCountRef.current;
-        tapCountRef.current = 0;
-        if (n === 1) doTap();
-        else if (n === 2) openApp(AppID.PetDesk);
-        else squash();
-      }, 280);
+
+    if (movedRef.current) {
+      // 甩动判定：快甩→抛物线扔出；普通拖放→惯性滑行；慢放→恢复巡航
+      const fresh = Date.now() - lastMoveRef.current.at <= 200;
+      const svx = fresh ? dragVelRef.current.vx : 0;   // px/ms
+      const svy = fresh ? dragVelRef.current.vy : 0;
+      const speed = Math.hypot(svx, svy) * 1000;       // px/s
+      const dist = Math.hypot(e.clientX - (downRef.current?.x ?? e.clientX), e.clientY - (downRef.current?.y ?? e.clientY));
+      if (dist > 60 && speed > 600) {
+        fallRef.current = { vx: svx * 30 * FALL_V_SCALE, vy: svy * 30 * FALL_V_SCALE, bounces: 0 };
+        physAtRef.current = Date.now();
+        lastInteractAtRef.current = Date.now();
+        setEmotion(prev => { const n = add(prev, '生气', 8); saveEmotion(n); return n; });
+        showBubbleLocal(quotesPick('throw'), 1500, 2);
+      } else if (speed > 40) {
+        glideRef.current = { vx: svx * 30, vy: svy * 30 };
+        physAtRef.current = Date.now();
+        lastInteractAtRef.current = Date.now();
+        if (speed > 267) showBubbleLocal(quotesPick('glide'), 1500, 1);
+      } else {
+        applyAction();
+      }
+      return;
     }
+
+    // 点击：计数（1=跳，2=开面板，3=拍扁）
+    tapCountRef.current += 1;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = window.setTimeout(() => {
+      const n = tapCountRef.current;
+      tapCountRef.current = 0;
+      if (n === 1) doTap();
+      else if (n === 2) openApp(AppID.PetDesk);
+      else squash();
+    }, 280);
   };
 
   const moodName = mood(emotion);
-  const skin = getSkin(action);
+  const frames = getSkinFrames(action);
+  const skinSrc = frames.length ? frames[frame % frames.length] : frameUrl(action, frame);
 
   return (
     <>
@@ -376,7 +514,7 @@ const FloatingPet: React.FC = () => {
       {bubble && (
         <div
           className="fixed z-[86] px-3 py-1.5 rounded-2xl rounded-bl-sm bg-white/95 backdrop-blur border border-black/5 shadow-md text-[12px] text-slate-700 font-medium pointer-events-none whitespace-pre-line max-w-[220px]"
-          style={{ left: Math.min(pos.x + PET_SIZE / 2, window.innerWidth - 110), top: Math.max(pos.y - 34, 8), transform: 'translateX(-50%)' }}
+          style={{ left: Math.min(pos.x + sizeRef.current / 2, window.innerWidth - 110), top: Math.max(pos.y - 34, 8), transform: 'translateX(-50%)' }}
         >
           {bubble.text}
         </div>
@@ -387,12 +525,12 @@ const FloatingPet: React.FC = () => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        title={`桌宠 · ${moodName}（点=戳，双击开面板，长按摸头，拖动搬家）`}
+        title={`桌宠 · ${moodName}（点=戳，双击开面板，长按摸头，快甩=扔出去，拖动搬家）`}
         className="fixed z-[85] cursor-grab active:cursor-grabbing select-none touch-none"
-        style={{ left: pos.x, top: pos.y, width: PET_SIZE, height: PET_SIZE }}
+        style={{ left: pos.x, top: pos.y, width: sizeRef.current, height: sizeRef.current }}
       >
         <img
-          src={skin || frameUrl(action, frame)}
+          src={skinSrc}
           alt="桌宠"
           draggable={false}
           className="w-full h-full object-contain pointer-events-none"

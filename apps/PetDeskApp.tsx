@@ -5,11 +5,13 @@ import {
   loadEmotion, saveEmotion, add, mood, type EmotionState, type MoodName,
 } from '../utils/petEmotion';
 import {
-  showBubble, getAff, titleFor, awardAff, startFeed, getSatiety, getBloodTotal, bloodTitle,
-  isMode, toggleMode, getSkin, setSkin, resetSkin, resetAllSkin, PET_ACTIONS, type PetAction,
+  showBubble, getAff, titleFor, awardAff, setAffRaw, startFeed, getSatiety, getBloodTotal, bloodTitle,
+  isMode, toggleMode, getSkinFrames, addSkinFrame, removeSkinFrame, resetSkin, resetAllSkin, SKIN_MAX_FRAMES, PET_ACTIONS, type PetAction,
   getPersona, setPersona, PERSONA_MAX, waterToday, drinkWater, focusActive, focusText, startFocus, finishFocus,
   chatGapMin, setChatGapMin, chatJitter, setChatJitter, chatDailyCap, setChatDailyCap,
   prankScore, startPrank, tickOverTime,
+  getPetSize, setPetSize, getSpeedMul, setSpeedMul, getJumpPct, setJumpPct, getStandLift, setStandLift, getGlideLevel, setGlideLevel,
+  getFbSign, setFbSign, getInt,
 } from '../utils/petStore';
 import { userChat } from '../utils/petAI';
 import { fortune, theater, theaterResult, theaterLog, checkAchievements, ACHIEVEMENTS, isAchievementUnlocked, guideText } from '../utils/petExtras';
@@ -18,12 +20,10 @@ import { checkUpdate, PET_VERSION } from '../utils/petUpdate';
 import {
   moodIcon, IconHeart, IconDroplet, IconSparkles, IconChat, IconClock, IconMoon,
   IconBriefcase, IconArrowUp, IconTrophy, IconBug, IconBook, IconRefresh, FaceSmile,
+  IconMail, IconImage, IconScale, IconGauge,
 } from '../components/petIcons';
 
 type Action = 'mosquito' | 'happy' | 'sad' | 'work' | 'jump' | 'dead';
-
-const BASE = (import.meta.env.BASE_URL || '/') + 'pet/';
-const frameUrl = (a: Action, i: number) => `${BASE}${a}_${i + 1}.png`;
 
 const ACTIONS: { key: Action; label: string }[] = [
   { key: 'mosquito', label: '飞行' },
@@ -33,6 +33,26 @@ const ACTIONS: { key: Action; label: string }[] = [
   { key: 'jump', label: '跳跃' },
   { key: 'dead', label: '拍扁' },
 ];
+
+// 本地图片 → 压缩到最长边 maxEdge 的 dataURL（对齐原版 Skin 的缩图逻辑，避免撑爆 localStorage）
+const fileToDataURL = (file: File, maxEdge = 256): Promise<string> => new Promise((resolve) => {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { URL.revokeObjectURL(url); resolve(''); return; }
+    ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+    try { resolve(canvas.toDataURL('image/png')); } catch { resolve(''); }
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); resolve(''); };
+  img.src = url;
+});
 
 // 顶部 Tab 分组（对齐原生设置页 5 组）
 const TABS: { key: string; label: string; Icon: React.FC<{ size?: number; className?: string }> }[] = [
@@ -56,12 +76,81 @@ function Section({ title, icon: Icon, children }: { title: string; icon?: React.
   );
 }
 
+// 纯白 ins 风滑块行：标签 + 数值 + range
+function SliderRow({ label, min, max, value, onChange, format }: { label: string; min: number; max: number; value: number; onChange: (v: number) => void; format: (v: number) => string }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+        <span>{label}</span>
+        <span className="font-bold text-slate-700">{format(value)}</span>
+      </div>
+      <input type="range" min={min} max={max} value={value} onChange={e => onChange(Number(e.target.value))} className="w-full accent-slate-900" />
+    </div>
+  );
+}
+
 const PetDeskApp: React.FC = () => {
   const { closeApp, openApp, apiConfig, activeApp, addToast } = useOS();
   const [emotion, setEmotion] = useState<EmotionState>(loadEmotion);
   const [, force] = useState(0);
   const refresh = () => force(x => x + 1);
   const [tab, setTab] = useState('chat');
+
+  // 自定义形象：URL 草稿 / 本地图目标
+  const [urlDraft, setUrlDraft] = useState<Record<string, string>>({});
+  const [localFor, setLocalFor] = useState<Action | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const addUrl = (a: PetAction) => {
+    const s = (urlDraft[a] || '').trim();
+    if (!s) return;
+    addSkinFrame(a, s);
+    setUrlDraft(prev => ({ ...prev, [a]: '' }));
+    refresh();
+  };
+  const pickLocal = (a: Action) => { setLocalFor(a); fileInputRef.current?.click(); };
+  const onLocalPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const target = localFor;
+    e.target.value = '';
+    if (!target || !files.length) return;
+    for (const f of files.slice(0, SKIN_MAX_FRAMES)) {
+      const dataUrl = await fileToDataURL(f);
+      if (dataUrl) addSkinFrame(target as PetAction, dataUrl);
+    }
+    setLocalFor(null);
+    refresh();
+  };
+
+  // 反馈 / 许愿
+  const FEEDBACK_MAIL = 'mudaor0953@outlook.com';
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbBug, setFbBug] = useState('');
+  const [fbWish, setFbWish] = useState('');
+  const [fbName, setFbName] = useState(getFbSign());
+  const sendFeedback = () => {
+    if (!fbBug.trim() && !fbWish.trim()) { addToast('先写点内容再发吧～', 'error'); return; }
+    const sign = fbName.trim() || 'cn';
+    setFbSign(sign);
+    let body = '—— 桌宠融合版 · 反馈 ——\n';
+    if (fbBug.trim()) body += '\n【Bug 反馈】\n' + fbBug.trim() + '\n';
+    if (fbWish.trim()) body += '\n【建议 / 许愿】\n' + fbWish.trim() + '\n';
+    body += '\n【署名】' + sign;
+    body += '\n【版本】v' + PET_VERSION;
+    body += '\n【包名】com.aetheros.simulator';
+    const subject = '桌宠融合版反馈（' + sign + '）';
+    window.location.href = 'mailto:' + FEEDBACK_MAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    addToast('已调起邮件 App，点发送即可', 'success');
+  };
+
+  // 好感度修改弹窗
+  const [affEditOpen, setAffEditOpen] = useState(false);
+  const [affEditVal, setAffEditVal] = useState('');
+  const openAffEdit = () => { setAffEditVal(String(getAff())); setAffEditOpen(true); };
+  const commitAffEdit = () => {
+    const v = parseInt(affEditVal, 10);
+    if (Number.isFinite(v)) { setAffRaw(v); addToast('好感度已更新', 'success'); }
+    setAffEditOpen(false);
+  };
 
   // 状态订阅：好感/模式等变化时刷新面板
   useEffect(() => {
@@ -267,6 +356,44 @@ const PetDeskApp: React.FC = () => {
               </div>
             </div>
 
+            <Section title="宠物设置" icon={IconScale}>
+              <SliderRow label="蚊子大小" min={32} max={256} value={getPetSize()} onChange={v => setPetSize(v)} format={v => `${v}px`} />
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
+                <span className="flex items-center gap-1"><IconGauge size={14} className="text-slate-400" />飞行速度</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => { setSpeedMul(Math.round((getSpeedMul() - 0.2) * 10) / 10); refresh(); }} className="w-8 h-7 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-600 active:scale-90">－</button>
+                  <span className="font-bold text-slate-700 w-12 text-center">×{getSpeedMul().toFixed(1)}</span>
+                  <button onClick={() => { setSpeedMul(Math.round((getSpeedMul() + 0.2) * 10) / 10); refresh(); }} className="w-8 h-7 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-600 active:scale-90">＋</button>
+                </div>
+              </div>
+              <div className="mt-3"><SliderRow label="跳跃高度" min={4} max={40} value={getJumpPct()} onChange={v => setJumpPct(v)} format={v => `${v}%`} /></div>
+              <div className="mt-3"><SliderRow label="站立高度（离屏幕底部）" min={0} max={50} value={getStandLift()} onChange={v => setStandLift(v)} format={v => (v === 0 ? '贴底' : `${v}%`)} /></div>
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
+                <span className="flex items-center gap-1"><IconHeart size={14} className="text-slate-400" />好感度</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-700">{getAff()}</span>
+                  <button onClick={openAffEdit} className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-lg px-2 py-0.5 active:scale-95">修改</button>
+                </div>
+              </div>
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+                  <span className="flex items-center gap-1"><IconDroplet size={14} className="text-slate-400" />饱食度</span>
+                  <span className="font-bold text-slate-700">{Math.round(getSatiety())}/100</span>
+                </div>
+                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, getSatiety()))}%`, backgroundColor: getSatiety() < 15 ? '#e24b4a' : getSatiety() < 35 ? '#ef9f27' : '#639922' }} />
+                </div>
+              </div>
+              <div className="mt-3">
+                <div className="text-xs text-slate-600 mb-1.5">甩动惯性</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {['关', '轻', '中', '强'].map((n, i) => (
+                    <button key={n} onClick={() => { setGlideLevel(i); refresh(); }} className={`rounded-xl py-1.5 text-xs font-bold border active:scale-95 transition-transform ${getGlideLevel() === i ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>{n}</button>
+                  ))}
+                </div>
+              </div>
+            </Section>
+
             <Section title="互动" icon={IconHeart}>
               <div className="grid grid-cols-3 gap-3">
                 {([
@@ -282,21 +409,40 @@ const PetDeskApp: React.FC = () => {
               </div>
             </Section>
 
-            <Section title="宠物形象（6 种动作换图，留空=用内置帧）" icon={FaceSmile}>
-              <div className="space-y-2">
+            <Section title="宠物形象（每个动作最多 5 帧，支持 URL 或本地图）" icon={IconImage}>
+              <div className="space-y-2.5">
                 {ACTIONS.map(a => {
-                  const sk = getSkin(a.key as PetAction);
+                  const frames = getSkinFrames(a.key as PetAction);
                   return (
-                    <div key={a.key} className="flex items-center gap-2">
-                      <img src={sk || frameUrl(a.key, 0)} alt={a.label} draggable={false} className="w-8 h-8 object-contain" />
-                      <span className="w-10 text-xs text-slate-600 shrink-0">{a.label}</span>
-                      <input
-                        value={sk}
-                        onChange={e => setSkin(a.key as PetAction, e.target.value)}
-                        placeholder="图片 URL"
-                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-slate-400"
-                      />
-                      {sk && <button onClick={() => resetSkin(a.key as PetAction)} className="text-[10px] text-slate-400 shrink-0">清除</button>}
+                    <div key={a.key} className="rounded-xl border border-slate-100 p-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-slate-600">{a.label}</span>
+                        <span className="text-[10px] text-slate-400">{frames.length}/{SKIN_MAX_FRAMES} 帧</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        {Array.from({ length: SKIN_MAX_FRAMES }).map((_, i) => {
+                          const src = frames[i];
+                          return src ? (
+                            <button key={i} onClick={() => { removeSkinFrame(a.key as PetAction, i); refresh(); }} title="点击移除该帧" className="w-9 h-9 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 shrink-0">
+                              <img src={src} alt="" className="w-full h-full object-contain" />
+                            </button>
+                          ) : (
+                            <div key={i} className="w-9 h-9 rounded-lg border border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-slate-300 text-[10px] shrink-0">{i + 1}</div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={urlDraft[a.key] ?? ''}
+                          onChange={e => setUrlDraft(prev => ({ ...prev, [a.key]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') addUrl(a.key as PetAction); }}
+                          placeholder="图片 URL"
+                          className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-slate-400"
+                        />
+                        <button onClick={() => addUrl(a.key as PetAction)} className="text-[11px] font-bold text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1 active:scale-95 shrink-0">URL</button>
+                        <button onClick={() => pickLocal(a.key)} className="text-[11px] font-bold text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1 active:scale-95 shrink-0 flex items-center gap-0.5"><IconImage size={12} className="text-slate-400" />本地图</button>
+                        {frames.length > 0 && <button onClick={() => { resetSkin(a.key as PetAction); refresh(); }} className="text-[10px] text-slate-400 underline shrink-0">清除</button>}
+                      </div>
                     </div>
                   );
                 })}
@@ -323,20 +469,12 @@ const PetDeskApp: React.FC = () => {
         {tab === 'ai' && (
           <>
             <Section title="主动搭话节奏" icon={IconChat}>
-              <div className="space-y-2 text-xs text-slate-600">
-                <div className="flex items-center justify-between">
-                  <span>基准间隔（分钟）</span>
-                  <input type="number" value={chatGapMin()} onChange={e => setChatGapMin(Number(e.target.value))} className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-right outline-none" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>动态抖动（%）</span>
-                  <input type="number" value={chatJitter()} onChange={e => setChatJitter(Number(e.target.value))} className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-right outline-none" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>每天最多几条（0=不限）</span>
-                  <input type="number" value={chatDailyCap()} onChange={e => setChatDailyCap(Number(e.target.value))} className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-right outline-none" />
-                </div>
-              </div>
+              <SliderRow label="基准间隔" min={5} max={120} value={Math.round(chatGapMin())} onChange={v => setChatGapMin(v)} format={v => `${v} 分`} />
+              <div className="mt-3"><SliderRow label="动态抖动" min={0} max={100} value={chatJitter()} onChange={v => setChatJitter(v)} format={v => `±${v}%`} /></div>
+              <div className="mt-3"><SliderRow label="每天最多主动说" min={0} max={60} value={chatDailyCap()} onChange={v => setChatDailyCap(v)} format={v => (v === 0 ? '不限' : `${v} 条`)} /></div>
+              <p className="mt-3 text-[11px] text-slate-400">
+                {(() => { const g = chatGapMin(); const j = chatJitter(); const lo = Math.max(1, Math.round(g * (1 - j / 100))); const hi = Math.max(lo, Math.round(g * (1 + j / 100))); return `实际触发 ${lo} ~ ${hi} 分钟一次 · 今天已主动搭话 ${getInt('chatCount')}${chatDailyCap() === 0 ? ' 条（不限量）' : `/${chatDailyCap()} 条`}`; })()}
+              </p>
             </Section>
 
             <Section title="台词工坊（可自定义台词）" icon={IconBook}>
@@ -455,6 +593,27 @@ const PetDeskApp: React.FC = () => {
             <Section title="饲养指南" icon={IconBook}>
               <button onClick={() => setShowGuide(true)} className={btnGhost}>查看饲养指南</button>
             </Section>
+
+            <button onClick={() => setFbOpen(!fbOpen)} className="w-full mt-4 flex items-center justify-between bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+              <span className="flex items-center gap-1.5 text-[13px] font-bold text-[#666666]">
+                <IconMail size={16} className="text-[#999999]" />Bug 反馈 & 建议许愿
+              </span>
+              <span className="text-slate-400 text-xs">{fbOpen ? '▼' : '▶'}</span>
+            </button>
+            {fbOpen && (
+              <div className="mt-2 bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+                <p className="text-[11px] text-slate-400 mb-2">哪里不对、想要什么功能，写下来发给我，会自动带上版本号。</p>
+                <label className="text-xs font-bold text-slate-500 block mb-1">Bug 反馈</label>
+                <textarea value={fbBug} onChange={e => setFbBug(e.target.value)} placeholder="比如：点开某个页面后，屏幕底部多出一条黑边…" className="w-full h-20 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-slate-400 resize-none" />
+                <label className="text-xs font-bold text-slate-500 block mb-1 mt-2">建议 / 许愿</label>
+                <textarea value={fbWish} onChange={e => setFbWish(e.target.value)} placeholder="比如：希望它能记住我昨天说过的话…" className="w-full h-20 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-slate-400 resize-none" />
+                <div className="flex items-center gap-2 mt-2">
+                  <input value={fbName} onChange={e => setFbName(e.target.value)} placeholder="署名" className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-slate-400" />
+                  <button onClick={sendFeedback} className="bg-slate-900 text-white rounded-xl px-4 py-2 text-xs font-bold active:scale-95 flex items-center gap-1 shrink-0"><IconMail size={14} />发送</button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-2">发到 {FEEDBACK_MAIL}</p>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -468,6 +627,23 @@ const PetDeskApp: React.FC = () => {
             </h3>
             <p className="text-sm text-slate-600 whitespace-pre-line">{guideText()}</p>
             <button onClick={() => setShowGuide(false)} className="mt-4 w-full bg-slate-900 text-white rounded-xl py-2 text-sm font-bold">懂了</button>
+          </div>
+        </div>
+      )}
+
+      {/* 本地图选择（隐藏 input） */}
+      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={onLocalPicked} />
+
+      {/* 好感度修改弹窗 */}
+      {affEditOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-6" onClick={() => setAffEditOpen(false)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-xs shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-slate-800 mb-3">修改好感度</h3>
+            <input type="number" value={affEditVal} onChange={e => setAffEditVal(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-slate-400" />
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setAffEditOpen(false)} className="flex-1 bg-slate-100 rounded-xl py-2 text-sm font-bold text-slate-600">取消</button>
+              <button onClick={commitAffEdit} className="flex-1 bg-slate-900 text-white rounded-xl py-2 text-sm font-bold">确定</button>
+            </div>
           </div>
         </div>
       )}

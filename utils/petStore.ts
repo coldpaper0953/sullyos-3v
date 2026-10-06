@@ -265,16 +265,69 @@ export function putBool(key: string, v: boolean): void { setBool(key, v); emitSt
 export function getInt(key: string, def = 0): number { return num(key, def); }
 export function putInt(key: string, v: number): void { write(key, v); emitState(); }
 
-// ---------- 自定义形象（6 动作换图，空 = 用内置帧） ----------
+// ---------- 自定义形象（6 动作换图，最多 5 帧；支持 URL 与本地 dataURL） ----------
 export type PetAction = 'mosquito' | 'happy' | 'sad' | 'work' | 'jump' | 'dead';
 export const PET_ACTIONS: PetAction[] = ['mosquito', 'happy', 'sad', 'work', 'jump', 'dead'];
-export function getSkin(a: PetAction): string { return str('skin_' + a); }
-export function setSkin(a: PetAction, url: string): void { setStr('skin_' + a, url.trim()); emitState(); }
-export function resetSkin(a: PetAction): void { setStr('skin_' + a, ''); emitState(); }
+export const SKIN_MAX_FRAMES = 5;
+/** 读取某动作的自定义帧数组（兼容旧版单 URL 字符串格式） */
+export function getSkinFrames(a: PetAction): string[] {
+  const raw = str('skin_' + a);
+  if (!raw) return [];
+  try {
+    const p = JSON.parse(raw);
+    if (Array.isArray(p)) return p.filter((x): x is string => typeof x === 'string' && !!x).slice(0, SKIN_MAX_FRAMES);
+  } catch { /* fallthrough to legacy string */ }
+  return [raw].filter(x => !!x);
+}
+export function setSkinFrames(a: PetAction, frames: string[]): void {
+  write('skin_' + a, frames.filter(x => !!x).slice(0, SKIN_MAX_FRAMES));
+  emitState();
+}
+export function setSkinFrame(a: PetAction, idx: number, src: string): void {
+  const f = getSkinFrames(a);
+  while (f.length <= idx) f.push('');
+  f[idx] = src;
+  setSkinFrames(a, f);
+}
+export function addSkinFrame(a: PetAction, src: string): void {
+  const f = getSkinFrames(a);
+  if (f.length >= SKIN_MAX_FRAMES) return;
+  f.push(src);
+  setSkinFrames(a, f);
+}
+export function removeSkinFrame(a: PetAction, idx: number): void {
+  const f = getSkinFrames(a);
+  f.splice(idx, 1);
+  setSkinFrames(a, f);
+}
+export function resetSkin(a: PetAction): void { setSkinFrames(a, []); }
 export function resetAllSkin(): void {
   for (const a of PET_ACTIONS) setStr('skin_' + a, '');
   emitState();
 }
+/** 兼容旧接口：取第一帧 */
+export function getSkin(a: PetAction): string { return getSkinFrames(a)[0] || ''; }
+export function setSkin(a: PetAction, url: string): void { setSkinFrames(a, url.trim() ? [url.trim()] : []); }
+
+// ---------- 宠物外观与运动参数 ----------
+export function getPetSize(): number { return clamp(num('petSize', 72), 32, 256); }
+export function setPetSize(px: number): void { write('petSize', clamp(px, 32, 256)); emitState(); }
+export function getSpeedMul(): number { return clamp(num('speedMul', 1), 0.2, 4); }
+export function setSpeedMul(v: number): void { write('speedMul', clamp(v, 0.2, 4)); emitState(); }
+export function getJumpPct(): number { return clamp(num('jumpPct', 14), 4, 40); }
+export function setJumpPct(v: number): void { write('jumpPct', clamp(v, 4, 40)); emitState(); }
+export function getStandLift(): number { return clamp(num('standLift', 0), 0, 50); }
+export function setStandLift(v: number): void { write('standLift', clamp(v, 0, 50)); emitState(); }
+export function getGlideLevel(): number { return clamp(num('glideLevel', 2), 0, 3); }
+export function setGlideLevel(v: number): void { write('glideLevel', clamp(v, 0, 3)); emitState(); }
+/** 惯性档位摩擦力（每 30ms 物理帧）：关/轻/中/强 → 0 / 0.90 / 0.94 / 0.965 */
+export function glideFriction(lv: number): number {
+  return lv <= 0 ? 0 : lv === 1 ? 0.90 : lv === 3 ? 0.965 : 0.94;
+}
+
+// ---------- 反馈署名 ----------
+export function getFbSign(): string { return str('fbSign', 'cn'); }
+export function setFbSign(v: string): void { setStr('fbSign', v); }
 
 // ---------- 整蛊蚊群战绩 ----------
 export function prankScore(): { bestWave: number; totalKills: number } {
