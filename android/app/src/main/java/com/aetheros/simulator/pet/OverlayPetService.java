@@ -50,7 +50,7 @@ public class OverlayPetService extends Service {
     private TextView bubble;
     private WindowManager.LayoutParams bubbleLP;
     private TextView tabHandle;
-    private WindowManager.LayoutParams handleLP;
+    private WindowManager.LayoutParams tabHandleLP;
 
     // 帧图（res/drawable：<动作>_<1..5>.png + dead）
     private final Drawable[][] frames = new Drawable[5][5]; // mosquito/happy/sad/work/jump
