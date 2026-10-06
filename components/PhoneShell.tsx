@@ -38,6 +38,7 @@ const StudyApp = lazyApp(() => import('../apps/StudyApp'));
 const FAQApp = lazyApp(() => import('../apps/FAQApp'));
 const GameApp = lazyApp(() => import('../apps/GameApp'));
 const PetPvpApp = lazyApp(() => import('../apps/PetPvpApp'));
+const PetDeskApp = lazyApp(() => import('../apps/PetDeskApp'));
 const WorldbookApp = lazyApp(() => import('../apps/WorldbookApp'));
 const NovelApp = lazyApp(() => import('../apps/NovelApp'));
 const BankApp = lazyApp(() => import('../apps/BankApp'));
@@ -89,7 +90,7 @@ const APP_BY_ID: Partial<Record<AppID, PreloadableLazy>> = {
   [AppID.Guidebook]: GuidebookApp, [AppID.LifeSim]: LifeSimApp, [AppID.MemoryPalace]: MemoryPalaceApp,
   [AppID.Handbook]: HandbookApp, [AppID.QQBridge]: QQBridge, [AppID.HotNews]: HotNewsApp,
   [AppID.VRWorld]: VRWorldApp, [AppID.CharCreatorDev]: CharCreatorDevApp, [AppID.SpecialMoments]: SpecialMomentsApp,
-  [AppID.WorldHome]: WorldHomeApp,
+  [AppID.WorldHome]: WorldHomeApp, [AppID.PetDesk]: PetDeskApp,
 };
 // AppIcon 的 pointerdown 只预取用户正在点的 App；失败时由 preloadableLazy 清缓存，点击可正常重试。
 setAppPayloadWarmer((id: AppID) => APP_BY_ID[id]?.preload());
@@ -972,6 +973,7 @@ const PhoneShell: React.FC = () => {
       case AppID.FAQ: return <FAQApp />; 
       case AppID.Game: return <GameApp />; 
       case AppID.PetPvp: return <PetPvpApp />;
+      case AppID.PetDesk: return <PetDeskApp />;
       case AppID.Worldbook: return <WorldbookApp />;
       case AppID.Novel: return <NovelApp />; 
       case AppID.Bank: return <BankApp />;

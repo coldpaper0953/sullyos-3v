@@ -103,6 +103,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Study, name: '自习室', icon: 'Study', color: 'emerald' },
   { id: AppID.Game, name: 'TRPG', icon: 'Game', color: 'orange' },
   { id: AppID.PetPvp, name: '宠物对战', icon: 'Pet', color: 'fuchsia' },
+  { id: AppID.PetDesk, name: '桌宠', icon: 'Pet', color: 'emerald' },
   { id: AppID.Novel, name: '笔友会', icon: 'Novel', color: 'amber' },
   { id: AppID.Songwriting, name: '写歌', icon: 'Songwriting', color: 'fuchsia' },
   { id: AppID.VRWorld, name: '彼方', icon: 'VRWorld', color: 'indigo' },

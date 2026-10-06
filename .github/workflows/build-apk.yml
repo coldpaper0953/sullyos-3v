@@ -1,0 +1,52 @@
+name: build-apk
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 注意：不要设 GITHUB_PAGES，让 base 保持 '/'，Capacitor 用 https://localhost 加载绝对路径才对
+      - name: Build web assets
+        run: pnpm run build
+
+      # cap sync（而非 cap copy）：会一并生成 capacitor-cordova-android-plugins 桥接模块，
+      # 该目录被 gitignore，但 gradle 依赖它，必须每次重新生成
+      - name: Sync web assets to Android
+        run: npx cap sync android
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        run: cd android && ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sullyos-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 90

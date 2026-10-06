@@ -40,6 +40,7 @@ export enum AppID {
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
   Contacts = 'contacts', // 通讯录 — 所有可对话角色一览，点选直接切到和 ta 聊天
   PetPvp = 'pet_pvp', // 宠物对战 — 抽宠物、养成、回合制 PVP（脚本定结果，AI 写战报）
+  PetDesk = 'pet_desk', // 桌宠 — 悬浮蚊子宠物（从嗡嗡嗡桌宠融合而来）：巡航飞行、点击逗、情绪陪伴
 }
 
 export interface SystemLog {
