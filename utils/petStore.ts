@@ -229,7 +229,7 @@ export function setChatJitter(v: number): void { write('chatJitter', clamp(v, 0,
 export function chatDailyCap(): number { return num('chatDailyCap', 0); }
 export function setChatDailyCap(v: number): void { write('chatDailyCap', Math.max(0, Math.round(v))); }
 export function appSense(): boolean { return bool('appSense', true); }
-export function setAppSense(v: boolean): void { setBool('appSense', v); }
+export function setAppSense(v: boolean): void { setBool('appSense', v); emitState(); }
 
 // ---------- 人设 ----------
 export const PERSONA_MAX = 1500;

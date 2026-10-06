@@ -11,12 +11,14 @@ import {
   isMode, getSkinFrames, getChatLog, chatGapMin, chatJitter, chatDailyCap,
   focusTick, finishFocus, getInt, putInt, todayStr,
   getPetSize, getSpeedMul, getJumpPct, getStandLift, getGlideLevel, glideFriction,
+  appSense,
   type PetAction,
 } from '../utils/petStore';
-import { quotesPick, quotesPickFmt } from '../utils/petQuotes';
+import { quotesPick, quotesPickFmt, appSenseLine } from '../utils/petQuotes';
 import { aiChat, type PetAIConfig } from '../utils/petAI';
 import { randomEvent, checkAchievements } from '../utils/petExtras';
 import PrankOverlay from './PrankOverlay';
+import { IconTrophy } from './petIcons';
 
 type Action = PetAction;
 
@@ -37,6 +39,16 @@ const resolveDefaultAction = (s: EmotionState): Action => {
   if (isMode('jump')) return 'jump';
   if (isMode('work')) return 'work';
   return moodToAction(mood(s));
+};
+
+// App 感知：AppID → 吐槽类别（映射不到的 App 不出台词，与原版「其他」类一致）
+const APP_SENSE_CATEGORY: Partial<Record<AppID, string>> = {
+  [AppID.Chat]: '聊天', [AppID.GroupChat]: '聊天', [AppID.QQBridge]: '聊天',
+  [AppID.Social]: '聊天', [AppID.Contacts]: '聊天', [AppID.Call]: '聊天',
+  [AppID.Music]: '音乐', [AppID.Songwriting]: '音乐',
+  [AppID.Game]: '游戏', [AppID.PetPvp]: '游戏', [AppID.Guidebook]: '游戏',
+  [AppID.Browser]: '购物浏览', [AppID.Gallery]: '购物浏览',
+  [AppID.XhsFreeRoam]: '购物浏览', [AppID.XhsStock]: '购物浏览', [AppID.HotNews]: '购物浏览',
 };
 
 const BASE = (import.meta.env.BASE_URL || '/') + 'pet/';
@@ -358,6 +370,28 @@ const FloatingPet: React.FC = () => {
     return Math.max(30000, n * 60000 * Math.max(0.1, factor));
   };
 
+  // App 感知：进入可吐槽的 App 时按冷却 + 概率冒一句固定台词（对齐原版 appSenseTick，仅进入时判定一次）
+  const prevAppRef = useRef<AppID>(activeApp);
+  useEffect(() => {
+    const prev = prevAppRef.current;
+    prevAppRef.current = activeApp;
+    if (prev === activeApp) return;
+    if (!appSense()) return;
+    if (activeApp === AppID.Launcher) return;
+    if (isMode('dnd') || isMode('work') || prank != null) return;
+    if (Date.now() < deadUntilRef.current) return;
+    const cat = APP_SENSE_CATEGORY[activeApp];
+    if (!cat) return;
+    const now = Date.now();
+    const key = 'appsense_' + cat;
+    if (now - getInt(key) < 20 * 60 * 1000) return;
+    if (Math.random() >= 0.4) return;
+    putInt(key, now);
+    const line = appSenseLine(cat);
+    if (line) showBubbleLocal(line, 4500, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeApp, prank]);
+
   const doAutoChat = async () => {
     const cfg = apiRef.current;
     if (!cfg.apiKey || !cfg.baseUrl) return;
@@ -516,7 +550,12 @@ const FloatingPet: React.FC = () => {
           className="fixed z-[86] px-3 py-1.5 rounded-2xl rounded-bl-sm bg-white/95 backdrop-blur border border-black/5 shadow-md text-[12px] text-slate-700 font-medium pointer-events-none whitespace-pre-line max-w-[220px]"
           style={{ left: Math.min(pos.x + sizeRef.current / 2, window.innerWidth - 110), top: Math.max(pos.y - 34, 8), transform: 'translateX(-50%)' }}
         >
-          {bubble.text}
+          {bubble.text.startsWith('🏆') ? (
+            <span className="inline-flex items-center gap-1">
+              <IconTrophy size={13} className="text-amber-500" />
+              <span>{bubble.text.replace(/^🏆\s*/, '')}</span>
+            </span>
+          ) : bubble.text}
         </div>
       )}
 

@@ -144,6 +144,16 @@ export function quotesPickFmt(key: string, placeholders?: { n?: string; t?: stri
   return s;
 }
 
+/** App 感知吐槽：按「类别|台词」过滤后随机抽一条，该类别没有台词时返回 null */
+export function appSenseLine(cat: string, rnd: () => number = Math.random): string | null {
+  const lines = quotesGet('appsense')
+    .filter(l => l.startsWith(cat + '|'))
+    .map(l => l.slice(cat.length + 1).trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+  return lines[Math.floor(rnd() * lines.length)];
+}
+
 /** 保存用户覆盖 */
 export function quotesSave(key: string, lines: string[]): void {
   ensure();

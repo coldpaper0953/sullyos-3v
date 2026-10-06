@@ -8,7 +8,7 @@ import {
   showBubble, getAff, titleFor, awardAff, setAffRaw, startFeed, getSatiety, getBloodTotal, bloodTitle,
   isMode, toggleMode, getSkinFrames, addSkinFrame, removeSkinFrame, resetSkin, resetAllSkin, SKIN_MAX_FRAMES, PET_ACTIONS, type PetAction,
   getPersona, setPersona, PERSONA_MAX, waterToday, drinkWater, focusActive, focusText, startFocus, finishFocus,
-  chatGapMin, setChatGapMin, chatJitter, setChatJitter, chatDailyCap, setChatDailyCap,
+  chatGapMin, setChatGapMin, chatJitter, setChatJitter, chatDailyCap, setChatDailyCap, appSense, setAppSense,
   prankScore, startPrank, tickOverTime,
   getPetSize, setPetSize, getSpeedMul, setSpeedMul, getJumpPct, setJumpPct, getStandLift, setStandLift, getGlideLevel, setGlideLevel,
   getFbSign, setFbSign, getInt,
@@ -475,6 +475,17 @@ const PetDeskApp: React.FC = () => {
               <p className="mt-3 text-[11px] text-slate-400">
                 {(() => { const g = chatGapMin(); const j = chatJitter(); const lo = Math.max(1, Math.round(g * (1 - j / 100))); const hi = Math.max(lo, Math.round(g * (1 + j / 100))); return `实际触发 ${lo} ~ ${hi} 分钟一次 · 今天已主动搭话 ${getInt('chatCount')}${chatDailyCap() === 0 ? ' 条（不限量）' : `/${chatDailyCap()} 条`}`; })()}
               </p>
+            </Section>
+
+            <Section title="App 感知" icon={IconSparkles}>
+              <div className="grid grid-cols-2 gap-2">
+                {([true, false] as const).map(v => (
+                  <button key={String(v)} onClick={() => { setAppSense(v); refresh(); }} className={`rounded-xl py-1.5 text-xs font-bold border active:scale-95 transition-transform ${appSense() === v ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>
+                    {v ? '开' : '关'}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">进入聊天 / 游戏 / 音乐 / 刷贴等 App 时，它会随机吐槽一句（每类 App 20 分钟最多一次，勿扰和工作中不插嘴）。关掉只停这里的主动吐槽，AI 聊天里它仍然知道你在用什么 App。</p>
             </Section>
 
             <Section title="台词工坊（可自定义台词）" icon={IconBook}>
