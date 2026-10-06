@@ -11,7 +11,7 @@ import {
   isMode, getSkinFrames, getChatLog, chatGapMin, chatJitter, chatDailyCap,
   focusTick, finishFocus, getInt, putInt, todayStr,
   getPetSize, getSpeedMul, getJumpPct, getStandLift, getGlideLevel, glideFriction,
-  appSense,
+  appSense, overlayOn,
   type PetAction,
 } from '../utils/petStore';
 import { quotesPick, quotesPickFmt, appSenseLine } from '../utils/petQuotes';
@@ -91,6 +91,8 @@ const FloatingPet: React.FC = () => {
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [emotion, setEmotion] = useState<EmotionState>(loadEmotion);
   const [prank, setPrank] = useState<number | null>(null);
+  // 系统悬浮模式运行中时，WebView 内的宠物整体隐藏（原生悬浮宠已在最上层）
+  const [overlayActive, setOverlayActive] = useState(overlayOn());
 
   const posRef = useRef(pos);
   const velRef = useRef({ vx: 2, vy: 1.2 });
@@ -319,6 +321,7 @@ const FloatingPet: React.FC = () => {
       jumpPctRef.current = getJumpPct();
       standLiftRef.current = getStandLift();
       glideLevelRef.current = getGlideLevel();
+      setOverlayActive(overlayOn());
     });
     return () => { offBubble(); offPrank(); offState(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -541,6 +544,9 @@ const FloatingPet: React.FC = () => {
   const moodName = mood(emotion);
   const frames = getSkinFrames(action);
   const skinSrc = frames.length ? frames[frame % frames.length] : frameUrl(action, frame);
+
+  // 系统悬浮模式运行中：连右侧拉手一起隐藏（原生侧有自己的拉手）
+  if (overlayActive) return null;
 
   return (
     <>

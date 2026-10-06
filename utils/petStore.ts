@@ -231,6 +231,10 @@ export function setChatDailyCap(v: number): void { write('chatDailyCap', Math.ma
 export function appSense(): boolean { return bool('appSense', true); }
 export function setAppSense(v: boolean): void { setBool('appSense', v); emitState(); }
 
+// ---------- 系统悬浮模式（原生 OverlayPetService 运行中时隐藏 WebView 内的宠物，避免重复） ----------
+export function overlayOn(): boolean { return bool('overlayOn', false); }
+export function setOverlayOn(v: boolean): void { setBool('overlayOn', v); emitState(); }
+
 // ---------- 人设 ----------
 export const PERSONA_MAX = 1500;
 export function getPersona(): string { return str('petPersona'); }

@@ -11,8 +11,9 @@ import {
   chatGapMin, setChatGapMin, chatJitter, setChatJitter, chatDailyCap, setChatDailyCap, appSense, setAppSense,
   prankScore, startPrank, tickOverTime,
   getPetSize, setPetSize, getSpeedMul, setSpeedMul, getJumpPct, setJumpPct, getStandLift, setStandLift, getGlideLevel, setGlideLevel,
-  getFbSign, setFbSign, getInt,
+  getFbSign, setFbSign, getInt, overlayOn, setOverlayOn,
 } from '../utils/petStore';
+import { PetOverlay } from '../utils/petOverlay';
 import { userChat } from '../utils/petAI';
 import { fortune, theater, theaterResult, theaterLog, checkAchievements, ACHIEVEMENTS, isAchievementUnlocked, guideText } from '../utils/petExtras';
 import { quotesAll, quotesLabel, quotesSave, quotesReset } from '../utils/petQuotes';
@@ -95,6 +96,24 @@ const PetDeskApp: React.FC = () => {
   const [, force] = useState(0);
   const refresh = () => force(x => x + 1);
   const [tab, setTab] = useState('chat');
+
+  // 系统悬浮模式：权限 / 运行状态（从系统设置页回来时自动刷新）
+  const [ovPerm, setOvPerm] = useState(false);
+  const [ovRun, setOvRun] = useState(false);
+  const checkOv = React.useCallback(async () => {
+    try {
+      const { granted } = await PetOverlay.canOverlay();
+      const { running } = await PetOverlay.isRunning();
+      setOvPerm(granted);
+      setOvRun(running);
+    } catch { /* web dev */ }
+  }, []);
+  useEffect(() => {
+    checkOv();
+    const onVis = () => { if (document.visibilityState === 'visible') checkOv(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [checkOv]);
 
   // 自定义形象：URL 草稿 / 本地图目标
   const [urlDraft, setUrlDraft] = useState<Record<string, string>>({});
@@ -586,6 +605,34 @@ const PetDeskApp: React.FC = () => {
         {/* ===== 系统 ===== */}
         {tab === 'sys' && (
           <>
+            <Section title="系统悬浮模式" icon={IconSparkles}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-600">悬浮窗权限</span>
+                {ovPerm ? (
+                  <span className="text-xs font-bold text-emerald-600">已授权</span>
+                ) : (
+                  <button onClick={() => PetOverlay.openOverlaySettings().catch(() => {})} className="text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl px-3 py-1.5 active:scale-95">去授权</button>
+                )}
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-xs text-slate-600">悬浮桌宠</span>
+                {ovRun ? (
+                  <button onClick={async () => { try { await PetOverlay.stop(); } catch { /* ignore */ } setOverlayOn(false); checkOv(); }} className="text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl px-3 py-1.5 active:scale-95">关闭悬浮</button>
+                ) : (
+                  <button onClick={async () => {
+                    if (!ovPerm) { addToast('请先点「去授权」，允许显示在其他应用上层', 'error'); PetOverlay.openOverlaySettings().catch(() => {}); return; }
+                    try {
+                      await PetOverlay.start({ size: getPetSize(), speed: getSpeedMul(), jumpPct: getJumpPct(), glideLevel: getGlideLevel() });
+                      setOverlayOn(true);
+                      checkOv();
+                      addToast('悬浮桌宠已开启，去任何 App 上面看它吧！', 'success');
+                    } catch { addToast('开启失败：请先授予悬浮窗权限', 'error'); }
+                  }} className="bg-slate-900 text-white rounded-xl px-4 py-1.5 text-xs font-bold active:scale-95">开启悬浮</button>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">开启后蚊子会飞到所有 App 上面（和原版一样）：点一下=跳、双击=回到 SullyOS、长按=摸头、连点三下=拍扁、快甩=扔出去、双指捏合调大小，右缘白色小拉手随时回面板。开启期间 SullyOS 里的小蚊子会先收起来；大小/速度改动后重新开关一次生效。</p>
+            </Section>
+
             <Section title="更新与关于" icon={IconRefresh}>
               <div className="text-[11px] text-slate-400 mb-2">当前版本 v{PET_VERSION}</div>
               <button onClick={doCheckUpdate} disabled={updChecking} className="w-full bg-white border border-slate-200 rounded-xl py-2 text-xs font-bold text-slate-600 active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5">
