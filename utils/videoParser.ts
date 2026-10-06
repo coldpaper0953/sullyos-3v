@@ -14,9 +14,10 @@ const API_ENDPOINT = 'https://v1.apizero.cn/api/video-parse';
 const LS_KEY = 'sully_video_parse_key_v1';
 const REQUEST_TIMEOUT_MS = 20000;
 
-// 项目方共享 Key：按产品选择随公开前端一同分发，所有用户共用其额度。
-// 用户仍可在 localStorage 写入自己的 Key 覆盖；清空自定义值后回落到此共享 Key。
-const DEFAULT_VIDEO_PARSE_KEY = 'sk_live_4f53ade361c6c8cbead4395e858c1052e4ea1fc5e49a1a16';
+// 原项目方共享 Key 已移除（避免在公开仓库泄露第三方 key，且其 sk_live_ 前缀会被
+// GitHub secret 扫描误判为 Stripe key 拦截推送）。默认走匿名模式（配额按调用方 IP 计）。
+// 用户可在设置页「视频链接解析」里填自己的 apizero Key 提升配额。
+const DEFAULT_VIDEO_PARSE_KEY = '';
 
 /** 读取生效的 apizero API Key：localStorage 用户自填 > 内置默认 > 匿名（空串）。 */
 export const getVideoParseKey = (): string => {
