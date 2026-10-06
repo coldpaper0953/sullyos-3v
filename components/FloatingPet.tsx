@@ -407,6 +407,14 @@ const FloatingPet: React.FC = () => {
           onEnd={(report) => { setPrank(null); showBubbleLocal(report, 9000, 3); }}
         />
       )}
+
+      {/* 侧边拉手：屏幕右缘白色小竖条（纯白 ins 风），点击打开桌宠面板 */}
+      <button
+        onClick={() => openApp(AppID.PetDesk)}
+        title="打开桌宠面板"
+        className="fixed z-[85] right-0 top-1/2 -translate-y-1/2 w-[10px] h-11 bg-white shadow-md cursor-pointer active:scale-90 transition-transform select-none touch-none"
+        style={{ borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}
+      />
     </>
   );
 };
