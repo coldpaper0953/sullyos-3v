@@ -25,6 +25,7 @@ android {
     }
     signingConfigs {
         stable {
+            // keystore 已提交进仓库；缺失时配置期直接报错，绝不静默回退临时签名
             storeFile file(keystoreProps['storeFile'])
             storeType keystoreProps['storeType']
             storePassword keystoreProps['storePassword']
@@ -34,13 +35,12 @@ android {
     }
     buildTypes {
         debug {
-            // keystore 缺失时回落默认 debug 签名，保证 CI 不至于硬失败
-            signingConfig keystorePropsFile.exists() ? signingConfigs.stable : null
+            signingConfig signingConfigs.stable
         }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            signingConfig keystorePropsFile.exists() ? signingConfigs.stable : null
+            signingConfig signingConfigs.stable
         }
     }
 }
