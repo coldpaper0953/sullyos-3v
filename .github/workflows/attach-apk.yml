@@ -1,0 +1,40 @@
+name: attach-apk
+
+# 把某个 build-apk run 产物里的 APK 直接挂到 wwww 仓库的 Release 上
+# （本机上行不稳定时的备用发版通道）
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'build-apk 的 run id'
+        required: true
+      tag:
+        description: 'Release tag（wwwww 仓库），如 sullyos-v3.2.0'
+        required: true
+      asset:
+        description: '资产文件名，如 sullyos-3.2.0.apk'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact from build run
+        uses: actions/download-artifact@v4
+        with:
+          name: sullyos-apk
+          path: apk
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to release on wwww
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          mv apk/app-debug.apk "${{ inputs.asset }}"
+          gh release upload "${{ inputs.tag }}" "${{ inputs.asset }}" \
+            --repo coldpaper0953/wwwww --clobber
+          echo "attached: ${{ inputs.asset }} -> ${{ inputs.tag }}"
